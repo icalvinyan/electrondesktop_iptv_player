@@ -3,14 +3,16 @@ Run these in Terminal (in the iptv-player-v2 folder):
 cd ~/Documents/Claude/Projects/iptv-player-v2
 rm -f .git/index.lock .git/HEAD.lock
 git add -A
-git commit -m "Bake Trakt API credentials into the app; remove Client ID/Secret fields from UI"
+git commit -m "Bake Trakt + TMDB API credentials into the app; add poster/backdrop artwork via TMDB"
 git push
 
 Then quit the running Xtream TV app completely and relaunch it
 (npm start, or rebuild the DMG per REBUILD_DMG.txt) to pick up the change.
 
-You should now see "Connect Trakt" go straight to a QR code + short code,
-with no Client ID/Secret fields anywhere.
+You should now see:
+- "Connect Trakt" go straight to a QR code + short code, no Client ID/Secret fields
+- VOD cards and the spotlight banner showing real poster/backdrop artwork
+  pulled from TMDB (may take a moment to load in as each title is looked up)
 
 (No need for "-u origin feature/vod-tab" — the branch is already
 tracking origin from the last push.)

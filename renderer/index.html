@@ -4686,10 +4686,70 @@
     searchTitles(q)   { return this._get('/search/movie,show?query=' + encodeURIComponent(q) + '&limit=24'); },
   };
 
+  // App-level TMDB credentials (registered once by the app's developer — used
+  // purely to fetch posters/backdrops/overviews for VOD browsing).
+  const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIzNTBlNTZmZjllMDk1ODY2MjFkYTZiODQzNDM3NTlkOCIsIm5iZiI6MTc4MDg2NzE0MS4zOTM5OTk4LCJzdWIiOiI2YTI1ZTA0NWY4MDAwYmM3ZmY2MGM0NmUiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.Ho_zlsFbvxR69fC61oene9i5hOjCB5O5lM3iDxb3yxE';
   const TMDB_IMG = 'https://image.tmdb.org/t/p/w342';
+  const TMDB_BACKDROP_IMG = 'https://image.tmdb.org/t/p/w1280';
+
+  const TMDBAPI = {
+    BASE: 'https://api.themoviedb.org/3',
+    async _get(path) {
+      const r = await window.xtream.fetch(this.BASE + path, {
+        headers: { 'Authorization': 'Bearer ' + TMDB_TOKEN, 'Content-Type': 'application/json;charset=utf-8' }
+      });
+      if (!r.ok && r.status !== 200) throw new Error('TMDB error ' + r.status);
+      return JSON.parse(r.body || '{}');
+    },
+    async findByImdb(imdbId) {
+      const data = await this._get('/find/' + encodeURIComponent(imdbId) + '?external_source=imdb_id');
+      return (data.movie_results && data.movie_results[0]) || (data.tv_results && data.tv_results[0]) || null;
+    },
+    async searchMovie(title, year) {
+      const q = '/search/movie?query=' + encodeURIComponent(title) + (year ? '&year=' + encodeURIComponent(year) : '');
+      const data = await this._get(q);
+      return (data.results && data.results[0]) || null;
+    },
+    async searchShow(title, year) {
+      const q = '/search/tv?query=' + encodeURIComponent(title) + (year ? '&first_air_date_year=' + encodeURIComponent(year) : '');
+      const data = await this._get(q);
+      return (data.results && data.results[0]) || null;
+    },
+  };
+
+  // In-memory cache of TMDB lookups, keyed by IMDb ID (preferred) or title+year+kind.
+  // Caches the lookup Promise itself so concurrent card renders for the same
+  // title share one network request.
+  const _tmdbCache = new Map();
+  function tmdbLookup(entry, kind) {
+    const imdb = vodImdbOf(entry);
+    const title = vodTitleOf(entry);
+    const year = vodYearOf(entry);
+    const key = imdb ? ('imdb:' + imdb) : (kind + ':' + title.toLowerCase() + ':' + year);
+    if (_tmdbCache.has(key)) return _tmdbCache.get(key);
+    const p = (async () => {
+      try {
+        let result = null;
+        if (imdb) result = await TMDBAPI.findByImdb(imdb).catch(() => null);
+        if (!result && title) {
+          result = (kind === 'show')
+            ? await TMDBAPI.searchShow(title, year).catch(() => null)
+            : await TMDBAPI.searchMovie(title, year).catch(() => null);
+        }
+        if (!result) return null;
+        return {
+          poster: result.poster_path ? (TMDB_IMG + result.poster_path) : '',
+          backdrop: result.backdrop_path ? (TMDB_BACKDROP_IMG + result.backdrop_path) : '',
+          overview: result.overview || '',
+          rating: typeof result.vote_average === 'number' ? result.vote_average : 0,
+        };
+      } catch (e) { return null; }
+    })();
+    _tmdbCache.set(key, p);
+    return p;
+  }
+
   function vodPosterStyle(item) {
-    // Trakt items don't include images directly without extended=images (paid);
-    // fall back to a text card. If a poster URL is ever available, use it.
     if (item && item._poster) return `background-image:url('${item._poster}')`;
     return '';
   }
@@ -4721,20 +4781,50 @@
       <div class="vod-card-title">${escapeHtml(title)}</div>
       <div class="vod-card-sub">${escapeHtml(String(year || ''))}${kind ? ' · ' + kind : ''}</div>`;
     card.addEventListener('click', () => showVodSpotlight(entry, kind));
+    if (!entry._poster) {
+      tmdbLookup(entry, kind).then(meta => {
+        if (!meta) return;
+        if (meta.poster) entry._poster = meta.poster;
+        if (meta.backdrop) entry._backdrop = meta.backdrop;
+        if (meta.overview && !entry._tmdbOverview) entry._tmdbOverview = meta.overview;
+        if (typeof meta.rating === 'number') entry._tmdbRating = meta.rating;
+        const posterEl = card.querySelector('.vod-card-poster');
+        if (posterEl && entry._poster) {
+          posterEl.style.backgroundImage = `url('${entry._poster}')`;
+          posterEl.textContent = '';
+        }
+        if (State.vodFocused && State.vodFocused.entry === entry) showVodSpotlight(entry, kind);
+      });
+    }
     return card;
   }
 
   function showVodSpotlight(entry, kind) {
     State.vodFocused = { entry, kind };
+    const spotEl = $('#vod-spotlight');
+    // Scroll the spotlight into view so clicking a card from a lower rail
+    // visibly shows the selected title — otherwise it just updates off-screen.
+    if (spotEl) setTimeout(() => { try { spotEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 0);
     const title = vodTitleOf(entry);
     const year = vodYearOf(entry);
-    const overview = vodOverviewOf(entry);
+    const overview = vodOverviewOf(entry) || entry._tmdbOverview;
     $('#vod-spotlight').style.display = '';
     $('#vod-spotlight-title').textContent = title;
     $('#vod-spotlight-meta').textContent = [year, kind === 'show' ? 'Series' : 'Movie'].filter(Boolean).join(' · ');
     $('#vod-spotlight-overview').textContent = overview || 'No synopsis available.';
     const bg = $('#vod-spotlight-bg');
-    bg.style.backgroundImage = entry._backdrop ? `url('${entry._backdrop}')` : '';
+    bg.style.backgroundImage = entry._backdrop ? `url('${entry._backdrop}')` : (entry._poster ? `url('${entry._poster}')` : '');
+    if (!entry._backdrop || !entry._tmdbOverview) {
+      tmdbLookup(entry, kind).then(meta => {
+        if (!meta || !State.vodFocused || State.vodFocused.entry !== entry) return;
+        if (meta.poster) entry._poster = meta.poster;
+        if (meta.backdrop) entry._backdrop = meta.backdrop;
+        if (meta.overview && !entry._tmdbOverview) entry._tmdbOverview = meta.overview;
+        if (entry._backdrop) bg.style.backgroundImage = `url('${entry._backdrop}')`;
+        else if (entry._poster) bg.style.backgroundImage = `url('${entry._poster}')`;
+        if (!vodOverviewOf(entry) && entry._tmdbOverview) $('#vod-spotlight-overview').textContent = entry._tmdbOverview;
+      });
+    }
   }
 
   $('#vod-spotlight-play').addEventListener('click', () => {
