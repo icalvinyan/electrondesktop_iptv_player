@@ -1,0 +1,50 @@
+{
+  "name": "xtream-tv-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TiviMate-style desktop IPTV player (Xtream Codes + M3U) — Electron wrapper around the in-browser player.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect",
+    "package:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "package:win": "electron-builder --win",
+    "package:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "devDependencies": {
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.localhost.xtreamtv",
+    "productName": "Xtream TV",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "node_modules/ffmpeg-static/**"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "mac": {
+      "target": { "target": "dmg", "arch": ["arm64"] },
+      "category": "public.app-category.video",
+      "identity": null,
+      "notarize": false
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Video"
+    }
+  }
+}
