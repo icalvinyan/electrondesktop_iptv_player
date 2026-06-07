@@ -783,6 +783,66 @@ function configureNetwork() {
   });
 }
 
+// ---------- Cloudflare "Attention Required" / JS-challenge bypass ----------
+// Some stream-scraper addons (Torrentio, AIOStreams mirrors, etc.) sit behind
+// Cloudflare's bot-protection, which returns a 403 + an interstitial page that
+// runs a JS challenge before issuing a `cf_clearance` cookie. A plain HTTP
+// request can't execute that JS — but Electron already ships a full Chromium,
+// so we spin up a hidden BrowserWindow, let it load the page (Chromium solves
+// the challenge automatically), and the resulting cf_clearance cookie lands in
+// the *shared* session cookie jar — so the very next session.fetch() call from
+// netFetch sails through. This is effectively a built-in FlareSolverr.
+const _cfSolveInFlight = new Map(); // origin -> Promise, to dedupe concurrent solves
+function looksLikeCloudflareChallenge(status, body) {
+  if (status !== 403 && status !== 503) return false;
+  const b = (body || '').slice(0, 4000);
+  return /cloudflare/i.test(b) && (
+    /attention required/i.test(b) ||
+    /just a moment/i.test(b) ||
+    /cf-browser-verification/i.test(b) ||
+    /challenge-platform/i.test(b) ||
+    /checking your browser/i.test(b)
+  );
+}
+async function solveCloudflareChallenge(url, log) {
+  const origin = new URL(url).origin;
+  if (_cfSolveInFlight.has(origin)) return _cfSolveInFlight.get(origin);
+  const p = (async () => {
+    log && log('Cloudflare challenge detected for ' + origin + ' — solving with a hidden browser window…');
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: { session: session.defaultSession, sandbox: true },
+    });
+    try {
+      await win.loadURL(url, { userAgent: FAKE_UA });
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        let title = '';
+        try { title = await win.webContents.executeJavaScript('document.title'); } catch (e) {}
+        const challenged = /just a moment|attention required|checking your browser/i.test(title || '');
+        if (!challenged) {
+          // Give Chromium a brief moment to finish setting the clearance cookie
+          // after the challenge page redirects/reloads.
+          await new Promise(r => setTimeout(r, 1200));
+          log && log('Cloudflare challenge cleared for ' + origin);
+          return true;
+        }
+        await new Promise(r => setTimeout(r, 800));
+      }
+      log && log('Timed out waiting for Cloudflare challenge to clear for ' + origin);
+      return false;
+    } catch (e) {
+      log && log('Error while solving Cloudflare challenge for ' + origin + ': ' + (e.message || e));
+      return false;
+    } finally {
+      try { win.destroy(); } catch (e) {}
+      _cfSolveInFlight.delete(origin);
+    }
+  })();
+  _cfSolveInFlight.set(origin, p);
+  return p;
+}
+
 // ---------- IPC: native fetch (used by renderer for big M3U downloads) ----------
 // Uses Electron's session fetch (Chromium network stack) so cookies set by
 // manifest/playlist responses are automatically sent on subsequent segment requests.
@@ -793,23 +853,44 @@ async function netFetch(url, opts = {}) {
     'Accept': '*/*',
     ...(opts.headers || {}),
   };
-  // Use Electron session fetch — shares Chromium cookie jar and goes through
-  // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
-  const res = await session.defaultSession.fetch(url, {
-    method: opts.method || 'GET',
-    headers,
-    body: opts.body,
-  });
-  const buf = Buffer.from(await res.arrayBuffer());
-  const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
-  const headerObj = {};
-  res.headers.forEach((v, k) => { headerObj[k] = v; });
-  return {
-    ok: res.ok,
-    status: res.status,
-    headers: headerObj,
-    body,
+  const doFetch = async () => {
+    // Use Electron session fetch — shares Chromium cookie jar and goes through
+    // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
+    const res = await session.defaultSession.fetch(url, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.body,
+    });
+    const buf = Buffer.from(await res.arrayBuffer());
+    const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
+    const headerObj = {};
+    res.headers.forEach((v, k) => { headerObj[k] = v; });
+    return { ok: res.ok, status: res.status, headers: headerObj, body };
   };
+
+  let result = await doFetch();
+
+  // If we hit a Cloudflare interstitial and the caller hasn't opted out, try to
+  // solve it once with a hidden browser window, then retry the request.
+  if (!opts.noCfBypass && looksLikeCloudflareChallenge(result.status, result.body)) {
+    netLog(`Cloudflare interstitial detected for ${url} (status ${result.status}) — attempting bypass…`);
+    const solved = await solveCloudflareChallenge(url, netLog);
+    if (solved) {
+      netLog(`Bypass reported success for ${new URL(url).origin} — retrying original request…`);
+      result = await doFetch();
+      netLog(`Retry after bypass: ${url} → status ${result.status}`);
+      if (!result.ok) {
+        netLog(`Bypass did not actually unblock the request — still got status ${result.status}. ` +
+               `This usually means the site is using an interactive/managed challenge (CAPTCHA) ` +
+               `that can't be solved automatically, or it's blocking by IP/rate-limit rather than a JS puzzle.`);
+      }
+    } else {
+      netLog(`Bypass failed/timed out for ${new URL(url).origin} — the challenge likely requires ` +
+             `human interaction (CAPTCHA) or the block isn't a solvable JS challenge.`);
+    }
+  }
+
+  return result;
 }
 
 ipcMain.handle('net:fetch', (_evt, url, opts = {}) => netFetch(url, opts));
@@ -1090,6 +1171,18 @@ function castLog(...args) {
   console.log('[Cast]', msg);
   if (mainWindow && !mainWindow.isDestroyed()) {
     try { mainWindow.webContents.send('cast:log', msg); } catch(_) {}
+  }
+}
+
+// ---- Net/Cloudflare-bypass debug logger — forwards to renderer DevTools ----
+// Main-process console.log only goes to the launching terminal, which most
+// users never see. Forward these lines to the renderer's DevTools console too
+// (prefixed "[netFetch]") so they show up in the same place as "[VOD]" logs
+// and in any exported console log the user sends us.
+function netLog(msg) {
+  console.log('[netFetch]', msg);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('net:log', String(msg)); } catch(_) {}
   }
 }
 

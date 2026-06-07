@@ -134,6 +134,53 @@
   .form-error { color: var(--danger); font-size:12px; margin-top:6px; min-height:14px; }
   .form-ok    { color: var(--ok);     font-size:12px; margin-top:6px; min-height:14px; }
 
+  /* ----------- Mode launcher (Live TV vs VOD) ----------- */
+  #mode-launcher {
+    position:fixed; inset:0; z-index: 65; display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(900px 600px at 80% -20%, rgba(91,140,255,.15), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(122,162,255,.10), transparent 60%),
+      var(--bg-0);
+  }
+  #mode-launcher.hidden { display:none !important; }
+  /* While the launcher is up, keep the Live TV shell out of the layout so its
+     sidebar/observers/EPG lookups don't fire before the user picks a mode. */
+  #mode-launcher:not(.hidden) ~ #app .main { display:none !important; }
+  .launcher-card {
+    width: min(820px, 95vw);
+    text-align:center;
+  }
+  .launcher-card h1 {
+    margin:0 0 6px; font-size:26px; letter-spacing:.2px;
+    display:flex; align-items:center; justify-content:center; gap:10px;
+  }
+  .launcher-card .sub { color: var(--muted); font-size:14px; margin-bottom:28px; }
+  .launcher-modes { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }
+  .launcher-mode-btn {
+    width: min(320px, 100%);
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border:1px solid var(--line); border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 28px 20px;
+    cursor:pointer;
+    transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    color: var(--text);
+  }
+  .launcher-mode-btn:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+  }
+  .launcher-mode-btn .icon {
+    width:56px; height:56px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background: rgba(91,140,255,.12); color: var(--accent-2);
+  }
+  .launcher-mode-btn .icon svg { width:28px; height:28px; }
+  .launcher-mode-btn .title { font-size:17px; font-weight:700; }
+  .launcher-mode-btn .desc { font-size:12.5px; color: var(--muted); line-height:1.4; }
+
   /* ----------- App shell ----------- */
   #app { display:none; height:100%; flex-direction:column; }
   #app.show { display:flex; }
@@ -161,38 +208,102 @@
   .nav-tabs button.active { background: var(--bg-4); color: var(--text); }
 
   /* ---- VOD (Netflix-style) ---- */
-  .vod-root { display:flex; flex-direction:column; height:100%; overflow:auto; }
+  /* Settings modal — Live TV and VOD settings are visually grouped (and
+     auto-expanded/collapsed based on the mode you're currently in) so the
+     two independent feature sets don't read as one big mixed list. */
+  .settings-group-title {
+    font-size:13px; font-weight:800; letter-spacing:0.3px; text-transform:uppercase;
+    color: var(--muted); margin-bottom:12px;
+  }
+  .settings-group-divider { height:1px; background: var(--line); margin:2px 0; }
+  .settings-group.dimmed { opacity:0.45; }
+
+  .vod-root { display:flex; flex-direction:column; height:100%; overflow:hidden; }
   .vod-hub { display:flex; gap:6px; padding:14px 20px 0; }
   .vod-hub button {
     background: transparent; border:none; padding:8px 16px; border-radius:999px;
     color: var(--muted); font-weight:600; font-size:14px;
   }
   .vod-hub button.active { background: var(--bg-4); color: var(--text); }
+  /* When relocated into the top bar (VOD's primary nav), drop the content-area
+     padding and align it like Live TV's nav-tabs. */
+  .vod-hub.vod-hub-in-topbar { padding: 0; gap: 4px; }
+  .vod-hub.vod-hub-in-topbar button { padding: 8px 14px; font-size: 13px; }
   .vod-spotlight {
-    position:relative; margin:16px 20px 0; height:340px; border-radius:14px; overflow:hidden;
-    display:flex; align-items:flex-end; background: var(--bg-2);
+    position:relative; margin:16px 20px 18px; height:460px; border-radius:14px; overflow:hidden;
+    display:flex; align-items:flex-end; background: var(--bg-2); flex:none;
   }
   .vod-spotlight-bg {
-    position:absolute; inset:0; background-size:cover; background-position:center top;
-    filter:brightness(0.55);
+    position:absolute; inset:0; background-size:cover; background-position:center 20%;
+    filter:brightness(1.15);
   }
   .vod-spotlight-bg::after {
     content:''; position:absolute; inset:0;
-    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.1) 60%);
+    background: linear-gradient(to top, rgba(0,0,0,0.92) 8%, rgba(0,0,0,0.4) 50%, rgba(0,0,0,0.05) 78%),
+                linear-gradient(to right, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 55%);
   }
-  .vod-spotlight-info { position:relative; padding:24px 28px; max-width:640px; display:flex; flex-direction:column; gap:8px; }
-  .vod-spotlight-title { font-size:28px; font-weight:800; text-shadow:0 2px 12px rgba(0,0,0,0.6); }
-  .vod-spotlight-meta { font-size:13px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; }
+  .vod-spotlight-info {
+    position:relative; padding:32px 32px 40px; max-width:640px; max-height:100%;
+    display:flex; flex-direction:column; gap:10px; box-sizing:border-box; overflow:hidden;
+  }
+  .vod-spotlight-logo {
+    max-width:280px; max-height:84px; width:auto; height:auto; object-fit:contain;
+    object-position:left bottom; filter:drop-shadow(0 2px 14px rgba(0,0,0,0.65));
+    align-self:flex-start; margin-bottom:2px;
+  }
+  .vod-spotlight-title { font-size:26px; font-weight:800; text-shadow:0 2px 12px rgba(0,0,0,0.6); }
+  .vod-spotlight-meta {
+    font-size:13px; color:var(--muted); display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  }
+  .vod-spotlight-meta .stars { color:#f5c518; letter-spacing:1px; font-size:12px; }
+  .vod-spotlight-meta .pill {
+    border:1px solid rgba(255,255,255,0.35); border-radius:4px; padding:1px 7px;
+    font-size:11px; font-weight:700; color:var(--text); line-height:1.4;
+  }
+  .vod-spotlight-meta .dot { opacity:0.45; }
+  .vod-spotlight-meta .pill.release-status {
+    border-radius:999px; padding:2px 10px; letter-spacing:0.2px; font-weight:700;
+  }
+  .vod-spotlight-meta .pill.release-status.in-theaters {
+    border-color:#3ddc84; color:#3ddc84;
+  }
+  .vod-spotlight-meta .pill.release-status.on-digital {
+    border-color:#01b4e4; color:#01b4e4;
+  }
   .vod-spotlight-overview {
-    font-size:13px; color:var(--text); opacity:0.85; line-height:1.5;
-    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+    font-size:13px; color:var(--text); opacity:0.85; line-height:1.5; max-width:560px;
   }
-  .vod-spotlight-actions { margin-top:6px; }
+  .vod-spotlight-scores { display:flex; align-items:center; gap:18px; }
+  .vod-spotlight-scores .score {
+    display:flex; align-items:center; gap:7px; font-size:14px; font-weight:700; color:var(--text);
+  }
+  .vod-spotlight-scores .score-icon {
+    display:inline-flex; align-items:center; justify-content:center; flex:none;
+    width:22px; height:22px; border-radius:50%; font-size:11px; font-weight:800; line-height:1;
+  }
+  .vod-spotlight-scores .score-icon.tmdb { background:#0d253f; color:#01b4e4; border:1px solid #01b4e4; }
+  .vod-spotlight-scores .score-icon.percent { background:transparent; color:#3ddc84; border:2px solid #3ddc84; }
+  .vod-spotlight-actions { margin-top:4px; }
   .vod-search-row { padding:16px 20px 0; }
   .vod-search-row input { width:min(520px, 100%); }
-  .vod-rails { display:flex; flex-direction:column; gap:22px; padding:20px; }
+  .vod-rails {
+    display:flex; flex-direction:column; gap:14px; padding:0 20px 20px;
+    flex:1; min-height:0; overflow:hidden;
+  }
   .vod-rail-title { font-size:16px; font-weight:700; margin-bottom:10px; }
-  .vod-rail-track { display:flex; gap:12px; overflow-x:auto; padding-bottom:6px; scroll-behavior:smooth; }
+  .vod-tabbed-rail { display:flex; flex-direction:column; flex:1; min-height:0; }
+  .vod-rail-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; flex:none; }
+  .vod-rail-tabs button {
+    background: transparent; border:1px solid rgba(255,255,255,0.18); color:var(--muted);
+    border-radius:999px; padding:7px 16px; font-size:13px; font-weight:600; cursor:pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .vod-rail-tabs button:hover { color:var(--text); border-color:rgba(255,255,255,0.35); }
+  .vod-rail-tabs button.active { background: var(--text); color: var(--bg-1, #0b0d12); border-color: var(--text); }
+  .vod-rail-track {
+    display:flex; gap:12px; overflow-x:auto; overflow-y:hidden; padding-bottom:6px;
+    scroll-behavior:smooth; flex:1; min-height:0; align-items:flex-start;
+  }
   .vod-card {
     flex: 0 0 150px; cursor:pointer; transition: transform .15s ease;
     display:flex; flex-direction:column; gap:6px;
@@ -1131,8 +1242,11 @@
 <body>
 
 <!-- ========================== CONNECT SCREEN ========================== -->
-<div id="connect-screen">
+<div id="connect-screen" style="display:none;">
   <div class="connect-card">
+    <button id="btn-connect-back-to-launcher" class="icon-btn" title="Back to Live TV / VOD picker" style="float:right; margin-left:8px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+    </button>
     <h1><span class="logo-dot"></span> Xtream TV</h1>
     <div class="sub">Connect to your Xtream-compatible IPTV server to browse channels, watch live, and view the guide.</div>
     <div id="file-origin-warn" style="display:none; background:rgba(255,181,71,.12); border:1px solid rgba(255,181,71,.4); color:#ffd391; padding:10px 12px; border-radius:8px; margin: 4px 0 10px; font-size:12.5px; line-height:1.5;">
@@ -1316,12 +1430,42 @@
   </div>
 </div>
 
+<!-- ========================== MODE LAUNCHER ========================== -->
+<!-- Shown right after connecting; lets the user choose Live TV or VOD.    -->
+<!-- Switching modes fully tears down whichever mode is left so it stops  -->
+<!-- using CPU in the background (HLS players, EPG timers, lookups, etc). -->
+<div id="mode-launcher" class="hidden">
+  <div class="launcher-card">
+    <h1><span class="logo-dot"></span> What would you like to watch?</h1>
+    <div class="sub">Pick a mode to continue. You can switch any time — leaving a mode stops it completely so it won't keep running in the background.</div>
+    <div class="launcher-modes">
+      <button class="launcher-mode-btn" id="mode-btn-live" data-mode="live">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 3l4 3 4-3"/></svg>
+        </span>
+        <span class="title">Live TV</span>
+        <span class="desc">Channels, program guide, multi-view and favorites — your normal Xtream experience.</span>
+      </button>
+      <button class="launcher-mode-btn" id="mode-btn-vod" data-mode="vod">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M3 17l4-4 3 3 4-5 5 6"/><circle cx="9" cy="8" r="1.5" fill="currentColor" stroke="none"/></svg>
+        </span>
+        <span class="title">Video On Demand</span>
+        <span class="desc">Browse and stream movies &amp; shows with posters, ratings and metadata from TMDB.</span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ========================== MAIN APP ========================== -->
 <div id="app">
   <!-- Top bar -->
   <div class="topbar">
     <div class="brand"><span class="logo-dot"></span> Xtream TV</div>
-    <div class="sep"></div>
+    <button id="btn-switch-mode" class="icon-btn" title="Switch between Live TV and Video On Demand">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+    </button>
+    <div class="sep" id="server-pill-sep"></div>
     <div class="server-pill" id="server-pill" title="Switch server">
       <span class="dot"></span>
       <span class="name" id="server-pill-name">—</span>
@@ -1332,10 +1476,9 @@
       <button class="active" data-view="player">Live</button>
       <button data-view="multi">Multi</button>
       <button data-view="favorites">Favorites</button>
-      <button data-view="vod">VOD</button>
     </div>
     <div class="grow"></div>
-    <div class="search">
+    <div class="search" id="channel-search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input id="search-input" type="search" placeholder="Search channels…" />
     </div>
@@ -1573,17 +1716,18 @@
     <div class="view" id="view-vod">
       <div class="vod-root" id="vod-root">
         <div class="vod-hub" id="vod-hub">
-          <button class="active" data-vod-section="home">Home</button>
-          <button data-vod-section="movies">Movies</button>
+          <button class="active" data-vod-section="movies">Movies</button>
           <button data-vod-section="shows">Shows</button>
           <button data-vod-section="search">Search</button>
         </div>
         <div class="vod-spotlight" id="vod-spotlight" style="display:none;">
           <div class="vod-spotlight-bg" id="vod-spotlight-bg"></div>
           <div class="vod-spotlight-info">
+            <img class="vod-spotlight-logo" id="vod-spotlight-logo" alt="" style="display:none;">
             <div class="vod-spotlight-title" id="vod-spotlight-title"></div>
             <div class="vod-spotlight-meta" id="vod-spotlight-meta"></div>
             <div class="vod-spotlight-overview" id="vod-spotlight-overview"></div>
+            <div class="vod-spotlight-scores" id="vod-spotlight-scores"></div>
             <div class="vod-spotlight-actions">
               <button class="primary" id="vod-spotlight-play">▶ Play</button>
             </div>
@@ -1657,95 +1801,138 @@
       <button class="ghost" data-close="settings-modal">✕</button>
     </header>
     <section>
-      <div style="display:flex; flex-direction:column; gap:14px;">
-        <div>
-          <label>Default stream container</label>
-          <select id="s-container">
-            <option value="m3u8">HLS (m3u8)</option>
-            <option value="ts">MPEG-TS (.ts)</option>
-          </select>
-        </div>
-        <div>
-          <label>Hover preview</label>
-          <select id="s-preview">
-            <option value="on">On (after 700ms hover)</option>
-            <option value="slow">Slow (1.5s hover)</option>
-            <option value="off">Off</option>
-          </select>
-        </div>
-        <div>
-          <label>Autoplay next channel on stream error</label>
-          <select id="s-autonext">
-            <option value="off">Off</option>
-            <option value="on">On</option>
-          </select>
-        </div>
-        <div>
-          <label>Player controls opacity — <span id="s-overlay-opacity-val">100%</span></label>
-          <input type="range" id="s-overlay-opacity" min="10" max="100" step="5" value="100"
-            style="width:100%; accent-color:var(--accent);">
-        </div>
-        <div>
-          <label>Keyboard shortcuts</label>
-          <div style="display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:12px;">
-            <span><span class="kbd">Space</span> play/pause</span>
-            <span><span class="kbd">↑</span>/<span class="kbd">↓</span> change channel</span>
-            <span><span class="kbd">F</span> fullscreen</span>
-            <span><span class="kbd">M</span> mute</span>
-            <span><span class="kbd">/</span> search</span>
-            <span><span class="kbd">G</span> guide</span>
-            <span><span class="kbd">S</span> favorite</span>
-          </div>
-        </div>
-        <details class="section" id="integrations-section">
-          <summary>VOD Integrations (Real-Debrid / Trakt)</summary>
-          <div style="margin-top:10px; display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; flex-direction:column; gap:18px;">
+
+        <!-- ============================================================
+             LIVE TV — settings that only apply to the Xtream/M3U side
+             (player/stream prefs, the connected server profile, and the
+             destructive "danger zone" actions for that server).
+        ============================================================ -->
+        <div class="settings-group" id="settings-group-live">
+          <div class="settings-group-title">📺 Live TV</div>
+          <div style="display:flex; flex-direction:column; gap:14px;">
             <div>
-              <label>Real-Debrid</label>
-              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                <span id="s-rd-status" style="font-size:12px; color:var(--muted);">Not connected</span>
-                <button id="btn-rd-connect">Log in to Real-Debrid</button>
-                <button id="btn-rd-disconnect" class="danger" style="display:none;">Disconnect</button>
-              </div>
-              <div id="s-rd-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
-            </div>
-            <div>
-              <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
-              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
-                Connect your Trakt account by scanning a QR code or entering a short code at trakt.tv/activate — no password needed.
-              </div>
-              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                <span id="s-trakt-status" style="font-size:12px; color:var(--muted);">Not connected</span>
-                <button id="btn-trakt-connect">Connect Trakt</button>
-                <button id="btn-trakt-disconnect" class="danger" style="display:none;">Disconnect</button>
-              </div>
-              <div id="s-trakt-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
-            </div>
-            <div>
-              <label>Stream source (scraper)</label>
-              <select id="s-scraper-source">
-                <option value="torrentio">Torrentio (default)</option>
-                <option value="aiostreams">AIOStreams</option>
+              <label>Default stream container</label>
+              <select id="s-container">
+                <option value="m3u8">HLS (m3u8)</option>
+                <option value="ts">MPEG-TS (.ts)</option>
               </select>
             </div>
             <div>
-              <label>When multiple stream results are found</label>
-              <select id="s-autopick">
-                <option value="off">Let me choose (default)</option>
-                <option value="on">Auto-pick best stream</option>
+              <label>Hover preview</label>
+              <select id="s-preview">
+                <option value="on">On (after 700ms hover)</option>
+                <option value="slow">Slow (1.5s hover)</option>
+                <option value="off">Off</option>
               </select>
             </div>
+            <div>
+              <label>Autoplay next channel on stream error</label>
+              <select id="s-autonext">
+                <option value="off">Off</option>
+                <option value="on">On</option>
+              </select>
+            </div>
+            <div>
+              <label>Player controls opacity — <span id="s-overlay-opacity-val">100%</span></label>
+              <input type="range" id="s-overlay-opacity" min="10" max="100" step="5" value="100"
+                style="width:100%; accent-color:var(--accent);">
+            </div>
+            <div>
+              <label>Keyboard shortcuts</label>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:12px;">
+                <span><span class="kbd">Space</span> play/pause</span>
+                <span><span class="kbd">↑</span>/<span class="kbd">↓</span> change channel</span>
+                <span><span class="kbd">F</span> fullscreen</span>
+                <span><span class="kbd">M</span> mute</span>
+                <span><span class="kbd">/</span> search</span>
+                <span><span class="kbd">G</span> guide</span>
+                <span><span class="kbd">S</span> favorite</span>
+              </div>
+            </div>
+            <details class="section">
+              <summary>Server profile</summary>
+              <div id="server-edit-area" style="margin-top:10px;"></div>
+            </details>
+            <details class="section">
+              <summary>Danger zone</summary>
+              <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button id="btn-disconnect">Disconnect</button>
+                <button class="danger" id="btn-forget">Forget this server</button>
+              </div>
+            </details>
           </div>
-        </details>
+        </div>
+
+        <div class="settings-group-divider" id="settings-group-divider-mid"></div>
+
+        <!-- ============================================================
+             VIDEO ON DEMAND — settings for the standalone VOD layer.
+             Entirely independent of Xtream/M3U servers: Real-Debrid,
+             Trakt, TMDB-driven discovery, and stream "providers".
+        ============================================================ -->
+        <div class="settings-group" id="settings-group-vod">
+          <div class="settings-group-title">🎬 Video On Demand</div>
+          <details class="section" id="integrations-section" open>
+            <summary>VOD Integrations (Real-Debrid / Trakt)</summary>
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:14px;">
+              <div>
+                <label>Real-Debrid</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <span id="s-rd-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                  <button id="btn-rd-connect">Log in to Real-Debrid</button>
+                  <button id="btn-rd-disconnect" class="danger" style="display:none;">Disconnect</button>
+                </div>
+                <div id="s-rd-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
+              </div>
+              <div>
+                <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
+                <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
+                  Connect your Trakt account by scanning a QR code or entering a short code at trakt.tv/activate — no password needed.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <span id="s-trakt-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                  <button id="btn-trakt-connect">Connect Trakt</button>
+                  <button id="btn-trakt-disconnect" class="danger" style="display:none;">Disconnect</button>
+                </div>
+                <div id="s-trakt-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
+              </div>
+              <div>
+                <label>Stream providers</label>
+                <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">
+                  This app has no scraper built in — to find playable links for movies &amp; shows, add
+                  "providers": any Stremio-addon-protocol source (a manifest URL or base URL), or a
+                  "repository" (a JSON list of multiple providers). Providers are tried in order from
+                  top to bottom; drag to reorder. Search online for "Stremio addons" to find sources to add.
+                </div>
+                <div id="provider-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"></div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                  <input id="s-provider-url" type="text" placeholder="Paste a provider manifest or base URL…" style="flex:1; min-width:220px;">
+                  <button id="btn-provider-add">Add provider</button>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <input id="s-repo-url" type="text" placeholder="Paste a repository URL (JSON list of providers)…" style="flex:1; min-width:220px;">
+                  <button id="btn-repo-add">Add from repository</button>
+                </div>
+                <div id="s-provider-status" style="font-size:12px; margin-top:6px;"></div>
+              </div>
+              <div>
+                <label>When multiple stream results are found</label>
+                <select id="s-autopick">
+                  <option value="off">Let me choose (default)</option>
+                  <option value="on">Auto-pick best stream</option>
+                </select>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="settings-group-divider"></div>
+
+        <!-- Shared, mode-agnostic actions -->
         <details class="section">
-          <summary>Server profile</summary>
-          <div id="server-edit-area" style="margin-top:10px;"></div>
-        </details>
-        <details class="section">
-          <summary>Danger zone</summary>
+          <summary>Danger zone — all data</summary>
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="btn-disconnect">Disconnect</button>
-            <button class="danger" id="btn-forget">Forget this server</button>
             <button class="danger" id="btn-clear-all">Clear all local data</button>
           </div>
         </details>
@@ -1847,9 +2034,9 @@
       this._data.integrations    = Object.assign({
         realDebrid:    { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
         trakt:         { enabled: false, accessToken: '', refreshToken: '', expiresAt: 0 },
-        scraperSource: 'torrentio',   // 'torrentio' | 'aiostreams'
         autoPickStream: false,
         vodWatched:    {},            // { [imdbId]: { progress, lastWatchedAt, ... } } — local watch history fallback
+        providers:     null,          // array of stream-provider entries (see _migrateProviders) — null until migrated
       }, this._data.integrations || {});
       // Defensive sub-merges in case of older partial saves
       this._data.integrations.realDebrid = Object.assign(
@@ -1860,6 +2047,76 @@
         { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
         this._data.integrations.trakt || {}
       );
+      this._migrateProviders();
+    },
+
+    // ---- Stream providers (Stremio-addon-protocol-compatible sources) ----
+    // The app ships with NO scraper hardcoded — users add their own provider
+    // sources (self-hosted or public Stremio addons) via Settings, the same
+    // way Cloudstream/Syncler/Weyd let users install "extensions"/"providers".
+    // One-time migration: older saves had a fixed `scraperSource: 'torrentio'
+    // | 'aiostreams'` setting. Convert whatever the user had selected into a
+    // single starter provider entry pointing at the URL they were already
+    // using, so upgrading doesn't silently leave them with zero sources. This
+    // is a per-user migration of THEIR prior choice — not a bundled default.
+    _migrateProviders() {
+      const integ = this._data.integrations;
+      if (Array.isArray(integ.providers)) return; // already migrated (possibly to an empty list — respect that)
+      const providers = [];
+      const prior = integ.scraperSource;
+      if (prior === 'aiostreams') {
+        providers.push(this._makeProvider('AIOStreams', 'https://aiostreams.elfhosted.com', 'migrated'));
+      } else if (prior === 'torrentio' || prior === undefined) {
+        // `undefined` covers brand-new installs prior to this migration shipping —
+        // still seed Torrentio's public URL as a starter so VOD isn't dead on
+        // first launch; the user can remove/replace it freely from Settings.
+        providers.push(this._makeProvider('Torrentio', 'https://torrentio.strem.fun', 'migrated'));
+      }
+      integ.providers = providers;
+      delete integ.scraperSource;
+    },
+    _makeProvider(name, baseUrl, source) {
+      const clean = String(baseUrl || '').replace(/\/+$/, '');
+      return {
+        id: 'p_' + Math.random().toString(36).slice(2, 10),
+        name: name || clean,
+        baseUrl: clean,
+        manifestUrl: clean + '/manifest.json',
+        enabled: true,
+        addedAt: Date.now(),
+        source: source || 'manual', // 'manual' | 'repo' | 'migrated'
+      };
+    },
+    getProviders() { return Array.isArray(this._data.integrations.providers) ? this._data.integrations.providers : []; },
+    getEnabledProviders() { return this.getProviders().filter(p => p && p.enabled); },
+    addProvider(name, baseUrl, source) {
+      const clean = String(baseUrl || '').replace(/\/+$/, '');
+      if (!clean) return null;
+      const list = this.getProviders();
+      const dupe = list.find(p => p.baseUrl === clean);
+      if (dupe) return dupe;
+      const p = this._makeProvider(name, clean, source);
+      list.push(p);
+      this._data.integrations.providers = list;
+      this.save();
+      return p;
+    },
+    removeProvider(id) {
+      this._data.integrations.providers = this.getProviders().filter(p => p.id !== id);
+      this.save();
+    },
+    setProviderEnabled(id, enabled) {
+      const p = this.getProviders().find(p => p.id === id);
+      if (p) { p.enabled = !!enabled; this.save(); }
+    },
+    reorderProviders(idsInOrder) {
+      const list = this.getProviders();
+      const byId = new Map(list.map(p => [p.id, p]));
+      const reordered = idsInOrder.map(id => byId.get(id)).filter(Boolean);
+      // Append anything not mentioned (defensive — keeps no entries from vanishing)
+      list.forEach(p => { if (!idsInOrder.includes(p.id)) reordered.push(p); });
+      this._data.integrations.providers = reordered;
+      this.save();
     },
     async load() {
       // Desktop: load from userData JSON file via IPC
@@ -2006,12 +2263,6 @@
       this._data.integrations.trakt = {
         enabled: false, accessToken: '', refreshToken: '', expiresAt: 0
       };
-      this.save();
-    },
-
-    getScraperSource() { return this._data.integrations.scraperSource || 'torrentio'; },
-    setScraperSource(src) {
-      this._data.integrations.scraperSource = (src === 'aiostreams') ? 'aiostreams' : 'torrentio';
       this.save();
     },
 
@@ -2639,6 +2890,7 @@
     currentChannel: null,
     searchQuery: '',
     view: 'player',
+    mode: null, // 'live' | 'vod' — chosen on the launcher screen; null = launcher showing
     guide: {
       anchor: null, // Date — left edge of guide
       pxPerHour: 220,
@@ -3532,10 +3784,14 @@
         hideConnect(); showApp();
         $('#server-pill-name').textContent = server.name || server.host;
         $('#server-pill').classList.remove('offline');
-        // Play last channel immediately using saved info — don't wait for catalog
+        // Play last channel immediately using saved info — don't wait for catalog.
+        // But hold off entirely until the user has picked Live TV on the mode
+        // launcher (otherwise we'd start decoding video before they've chosen).
         const lastFast = Storage.lastChannel();
         if (lastFast && server.type !== 'm3u') {
-          playChannel({ stream_id: lastFast.id, name: lastFast.name || 'Loading…', stream_icon: lastFast.icon || '' }, /*autoFocus*/ false);
+          const fastCh = { stream_id: lastFast.id, name: lastFast.name || 'Loading…', stream_icon: lastFast.icon || '' };
+          if (State.mode === 'live') playChannel(fastCh, /*autoFocus*/ false);
+          else State._pendingLiveChannel = fastCh;
         }
         // Load catalog in background (large catalogs can take several seconds)
         loadCatalog(false);
@@ -3547,7 +3803,10 @@
       const last = Storage.lastChannel();
       if (last) {
         const ch = State.streamsAll.find(s => String(s.stream_id) === String(last.id || last));
-        if (ch) playChannel(ch, /*autoFocus*/ false);
+        if (ch) {
+          if (State.mode === 'live') playChannel(ch, /*autoFocus*/ false);
+          else State._pendingLiveChannel = ch;
+        }
       }
       setLoading(false);
     } catch (e) {
@@ -4008,6 +4267,186 @@
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Mode launcher: Live TV vs Video On Demand.
+  // Only one mode runs at a time — switching tears the other one all the
+  // way down (players destroyed, timers cleared, caches dropped) so it
+  // can't keep burning CPU in the background.
+  // ---------------------------------------------------------------------
+  function showModeLauncher() {
+    const el = $('#mode-launcher');
+    if (el) el.classList.remove('hidden');
+  }
+  function hideModeLauncher() {
+    const el = $('#mode-launcher');
+    if (el) el.classList.add('hidden');
+  }
+
+  function teardownLiveTV() {
+    try { console.log('[Mode] Tearing down Live TV… player.currentSrc=', State.player && State.player.currentSrc); } catch(e){}
+    // If casting, stop that first — otherwise playback continues on the TV
+    // even after the local player is destroyed.
+    try {
+      if (State.cast && (State.cast._casting || (typeof State.cast.isCasting === 'function' && State.cast.isCasting()))) {
+        if (typeof State.cast.stop === 'function') State.cast.stop();
+      }
+    } catch(e){}
+    try { if (State.player && typeof State.player.stop === 'function') State.player.stop(); } catch(e){}
+    try { if (State.preview && typeof State.preview.stop === 'function') State.preview.stop(); } catch(e){}
+    try {
+      if (typeof previewTimer !== 'undefined' && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    } catch(e){}
+    try {
+      if (State.multi) {
+        if (typeof State.multi._stopHealthMonitor === 'function') State.multi._stopHealthMonitor();
+        if (State.multi._healthInterval) { clearInterval(State.multi._healthInterval); State.multi._healthInterval = null; }
+        if (typeof State.multi.clear === 'function') State.multi.clear();
+      }
+    } catch(e){}
+    try {
+      if (State.mvPip && typeof State.mvPip.stop === 'function') State.mvPip.stop();
+    } catch(e){}
+    try {
+      if (State.guide && State.guide.nowInterval) { clearInterval(State.guide.nowInterval); State.guide.nowInterval = null; }
+    } catch(e){}
+    try { epgCache.clear(); } catch(e){}
+    try {
+      // Stop the live video element completely so decoding/network activity ends.
+      const v = $('#video');
+      if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); try { v.load(); } catch(e){} }
+    } catch(e){}
+    try { console.log('[Mode] Live TV torn down — player, multi-view, EPG timers and caches stopped.'); } catch(e){}
+  }
+
+  function teardownVOD() {
+    try { console.log('[Mode] Tearing down VOD…'); } catch(e){}
+    // Drop the focused entry so any in-flight async TMDB/scraper lookups that
+    // resolve later see a stale State.vodFocused and bail out (existing guard
+    // pattern: `if (State.vodFocused.entry !== entry) return;`).
+    try { State.vodFocused = null; } catch(e){}
+    try {
+      if (typeof _tmdbCache !== 'undefined' && _tmdbCache && typeof _tmdbCache.clear === 'function') _tmdbCache.clear();
+    } catch(e){}
+    try {
+      // Stop any movie/show currently playing from the VOD pipeline.
+      const v = $('#vod-video') || ($('#video') && State.mode !== 'live' ? $('#video') : null);
+      if (v && v.tagName === 'VIDEO') { try { v.pause(); } catch(e){} }
+    } catch(e){}
+    try { console.log('[Mode] VOD torn down — pending lookups invalidated, caches cleared.'); } catch(e){}
+    try { restoreVodHubToContent(); } catch(e){}
+  }
+
+  function showLiveTVChrome(show) {
+    const tabs      = $('#view-tabs');
+    const sidebar   = $('.sidebar');
+    const lip       = $('#sidebar-lip');
+    const pill      = $('#server-pill');
+    const pillSep   = $('#server-pill-sep');
+    const chSearch  = $('#channel-search');
+    const refreshBt = $('#btn-refresh');
+    if (tabs)    tabs.classList.toggle('hidden', !show);
+    if (sidebar) sidebar.classList.toggle('hidden', !show);
+    if (lip)     lip.classList.toggle('hidden', !show);
+    // The server selector, channel search box and channel-list refresh button
+    // all belong to Live TV only — VOD doesn't use Xtream/M3U servers or
+    // channels at all, so hide them (and the pill's separator) in VOD mode.
+    if (pill)      pill.classList.toggle('hidden', !show);
+    if (pillSep)   pillSep.classList.toggle('hidden', !show);
+    if (chSearch)  chSearch.classList.toggle('hidden', !show);
+    if (refreshBt) refreshBt.classList.toggle('hidden', !show);
+  }
+
+  // VOD's own Home/Movies/Shows/Search nav lives inside #vod-root by default,
+  // but we relocate it into the top bar (in the same slot Live TV's nav-tabs
+  // occupy) whenever VOD is active, so it reads as the primary top-level nav
+  // rather than a secondary row buried in the content area.
+  function placeVodHubInTopbar() {
+    const hub = $('#vod-hub');
+    const bar = $('.topbar');
+    const grow = $('.topbar .grow');
+    if (hub && bar && grow && hub.parentElement !== bar) {
+      bar.insertBefore(hub, grow);
+      hub.classList.add('vod-hub-in-topbar');
+    }
+  }
+  function restoreVodHubToContent() {
+    const hub  = $('#vod-hub');
+    const root = $('#vod-root');
+    if (hub && root && hub.parentElement !== root) {
+      root.insertBefore(hub, root.firstChild);
+      hub.classList.remove('vod-hub-in-topbar');
+    }
+  }
+
+  // Enter Live TV: this is the original Xtream experience, gated behind
+  // server connection. VOD has nothing to do with servers, so the connect
+  // screen is ONLY ever shown for Live TV.
+  function enterLiveTV() {
+    State.mode = 'live';
+    hideModeLauncher();
+    showLiveTVChrome(true);
+    restoreVodHubToContent();
+    // Switch the visible `.view` away from VOD immediately — `connectToServer`/
+    // `showConnect` don't call setView themselves, so without this the VOD
+    // view (#view-vod) would keep its `.show` class and stay on screen
+    // underneath (or instead of) the Live TV UI.
+    setView('player');
+    if (!State.api) {
+      // Not connected to a server yet — go through the normal connect flow
+      // (auto-connect to the saved active server, or show the picker).
+      const active = Storage.activeServer();
+      if (active) connectToServer(active);
+      else showConnect();
+    } else {
+      // Already connected from earlier in this session — just resume.
+      showApp();
+      setView('player');
+      try {
+        const pending = State._pendingLiveChannel || State.currentChannel;
+        if (pending) playChannel(pending, false);
+        State._pendingLiveChannel = null;
+      } catch(e){}
+    }
+    try { console.log('[Mode] Entered Live TV'); } catch(e){}
+  }
+
+  // Enter VOD: fully independent of Xtream/M3U servers — uses Real-Debrid,
+  // Trakt and TMDB directly, so we skip the connect screen entirely.
+  function enterVOD() {
+    State.mode = 'vod';
+    hideModeLauncher();
+    showLiveTVChrome(false);
+    placeVodHubInTopbar();
+    const castBar = $('#cast-bar');
+    if (castBar) castBar.classList.remove('show');
+    showApp();
+    setView('vod');
+    try { console.log('[Mode] Entered Video On Demand'); } catch(e){}
+  }
+
+  function setMode(mode) {
+    if (mode !== 'live' && mode !== 'vod') return;
+    if (State.mode === mode) { hideModeLauncher(); return; }
+
+    // Tear down whichever mode we're leaving (if any) so it stops using CPU.
+    if (State.mode === 'live') teardownLiveTV();
+    else if (State.mode === 'vod') teardownVOD();
+
+    if (mode === 'live') enterLiveTV();
+    else enterVOD();
+  }
+
+  $('#mode-btn-live') && $('#mode-btn-live').addEventListener('click', () => setMode('live'));
+  $('#mode-btn-vod')  && $('#mode-btn-vod').addEventListener('click',  () => setMode('vod'));
+  $('#btn-switch-mode') && $('#btn-switch-mode').addEventListener('click', () => showModeLauncher());
+  // From the connect screen (only reachable via Live TV), let the user back out
+  // to the launcher to pick VOD instead, without forcing them through a connection.
+  $('#btn-connect-back-to-launcher') && $('#btn-connect-back-to-launcher').addEventListener('click', () => {
+    $('#connect-screen').style.display = 'none';
+    State.mode = null;
+    showModeLauncher();
+  });
+
   // Search
   const onSearch = debounce(() => {
     State.searchQuery = $('#search-input').value.trim();
@@ -4375,6 +4814,18 @@
     $('#s-overlay-opacity-val').textContent = opacityPct + '%';
     renderServerEditor();
     renderIntegrationsPanel();
+    // Show only the settings relevant to whichever mode you're currently
+    // in — Live TV settings when in Live TV, VOD settings when in VOD —
+    // so the modal isn't a mixed list of two unrelated feature sets.
+    const liveGroup = $('#settings-group-live');
+    const vodGroup  = $('#settings-group-vod');
+    const onVod = State.mode === 'vod';
+    if (liveGroup) liveGroup.style.display = onVod ? 'none' : '';
+    if (vodGroup)  vodGroup.style.display  = onVod ? '' : 'none';
+    const midDivider = $('#settings-group-divider-mid');
+    if (midDivider) midDivider.style.display = 'none';
+    const integrations = $('#integrations-section');
+    if (integrations) integrations.open = true;
     openModal('settings-modal');
   });
   $('#s-container').addEventListener('change', () => {
@@ -4474,8 +4925,8 @@
       $('#s-trakt-device-area').innerHTML = '';
     }
 
-    // Scraper / autopick
-    $('#s-scraper-source').value = Storage.getScraperSource();
+    // Providers / autopick
+    renderProviderList();
     $('#s-autopick').value = Storage.getAutoPickStream() ? 'on' : 'off';
   }
 
@@ -4576,9 +5027,103 @@
     }
   });
 
-  $('#s-scraper-source').addEventListener('change', () => {
-    Storage.setScraperSource($('#s-scraper-source').value);
+  function setProviderStatus(msg, isError) {
+    const el = $('#s-provider-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--danger, #e55)' : 'var(--muted)';
+  }
+
+  function renderProviderList() {
+    const list = $('#provider-list');
+    if (!list) return;
+    const providers = Storage.getProviders();
+    if (!providers.length) {
+      list.innerHTML = '<div style="font-size:12px; color:var(--muted);">No providers added yet — paste a provider or repository URL below to get started.</div>';
+      return;
+    }
+    list.innerHTML = providers.map((p, i) => `
+      <div class="provider-row" draggable="true" data-id="${escapeHtml(p.id)}" style="display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--panel-2, rgba(255,255,255,0.04)); border-radius:8px; cursor:grab;">
+        <span style="opacity:.5; font-size:12px;">⋮⋮</span>
+        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          <strong>${escapeHtml(p.name || p.baseUrl)}</strong>
+          <span style="color:var(--muted); font-size:12px;"> — ${escapeHtml(p.baseUrl)}</span>
+        </span>
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; color:var(--muted);">
+          <input type="checkbox" class="provider-toggle" data-id="${escapeHtml(p.id)}" ${p.enabled ? 'checked' : ''}> enabled
+        </label>
+        <button class="provider-remove" data-id="${escapeHtml(p.id)}" style="font-size:12px;">Remove</button>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.provider-toggle').forEach(cb => {
+      cb.addEventListener('change', () => {
+        Storage.setProviderEnabled(cb.dataset.id, cb.checked);
+      });
+    });
+    list.querySelectorAll('.provider-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        Storage.removeProvider(btn.dataset.id);
+        renderProviderList();
+      });
+    });
+
+    // Drag-to-reorder
+    let dragId = null;
+    list.querySelectorAll('.provider-row').forEach(row => {
+      row.addEventListener('dragstart', () => { dragId = row.dataset.id; row.style.opacity = '0.4'; });
+      row.addEventListener('dragend', () => { row.style.opacity = ''; });
+      row.addEventListener('dragover', (e) => { e.preventDefault(); });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const targetId = row.dataset.id;
+        if (!dragId || dragId === targetId) return;
+        const ids = Storage.getProviders().map(p => p.id);
+        const from = ids.indexOf(dragId);
+        const to = ids.indexOf(targetId);
+        if (from < 0 || to < 0) return;
+        ids.splice(to, 0, ids.splice(from, 1)[0]);
+        Storage.reorderProviders(ids);
+        renderProviderList();
+      });
+    });
+  }
+
+  $('#btn-provider-add')?.addEventListener('click', async () => {
+    const input = $('#s-provider-url');
+    const url = (input?.value || '').trim();
+    if (!url) { setProviderStatus('Paste a provider URL first.', true); return; }
+    setProviderStatus('Checking provider…');
+    const result = await ProviderManager.addByUrl(url);
+    if (result.ok) {
+      input.value = '';
+      setProviderStatus(`Added "${result.provider.name}".`);
+      renderProviderList();
+    } else {
+      setProviderStatus(result.error, true);
+    }
   });
+
+  $('#btn-repo-add')?.addEventListener('click', async () => {
+    const input = $('#s-repo-url');
+    const url = (input?.value || '').trim();
+    if (!url) { setProviderStatus('Paste a repository URL first.', true); return; }
+    setProviderStatus('Loading repository…');
+    const repo = await ProviderManager.fetchRepo(url);
+    if (!repo.ok) { setProviderStatus(repo.error, true); return; }
+    if (!repo.entries.length) { setProviderStatus('That repository has no provider entries.', true); return; }
+    let added = 0, skipped = 0, failed = 0;
+    for (const entry of repo.entries) {
+      const r = await ProviderManager.addByUrl(entry.url);
+      if (r.ok) added++;
+      else if (/already in your provider list/.test(r.error || '')) skipped++;
+      else failed++;
+    }
+    input.value = '';
+    setProviderStatus(`Repository processed: ${added} added, ${skipped} already installed, ${failed} failed.`, failed > 0 && added === 0);
+    renderProviderList();
+  });
+
   $('#s-autopick').addEventListener('change', () => {
     Storage.setAutoPickStream($('#s-autopick').value === 'on');
   });
@@ -4691,6 +5236,122 @@
   const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIzNTBlNTZmZjllMDk1ODY2MjFkYTZiODQzNDM3NTlkOCIsIm5iZiI6MTc4MDg2NzE0MS4zOTM5OTk4LCJzdWIiOiI2YTI1ZTA0NWY4MDAwYmM3ZmY2MGM0NmUiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.Ho_zlsFbvxR69fC61oene9i5hOjCB5O5lM3iDxb3yxE';
   const TMDB_IMG = 'https://image.tmdb.org/t/p/w342';
   const TMDB_BACKDROP_IMG = 'https://image.tmdb.org/t/p/w1280';
+  const TMDB_LOGO_IMG = 'https://image.tmdb.org/t/p/w500';
+
+  // ---- VOD debug logging helpers ----
+  // All VOD-related errors funnel through these so they show up in DevTools
+  // console with enough context (status codes, raw response snippets) to
+  // diagnose "X failed" toasts without re-running the whole flow.
+  function vodLog(...args)  { try { console.log('[VOD]', ...args); } catch (e) {} }
+  function vodWarn(...args) { try { console.warn('[VOD]', ...args); } catch (e) {} }
+  function vodErr(...args)  { try { console.error('[VOD]', ...args); } catch (e) {} }
+  function safeJsonParse(body, context) {
+    try {
+      return JSON.parse(body || '{}');
+    } catch (e) {
+      vodErr(`${context}: response was not valid JSON —`, e.message,
+             '\nRaw response (first 400 chars):', String(body == null ? '' : body).slice(0, 400));
+      throw new Error(`${context} returned an unexpected response (not JSON) — see console for the raw body.`);
+    }
+  }
+
+  // ---- Provider manager: add/validate Stremio-addon-protocol stream sources ----
+  // The app has NO scraper baked in — users add their own "providers" (any
+  // Stremio addon that exposes a `stream` resource for movie/series, whether
+  // public, self-hosted, or a fork) by pasting either:
+  //   • a manifest URL / base URL for a single addon, or
+  //   • a "repository" URL — a JSON array of { name, url } entries to bulk-add
+  // This mirrors how Cloudstream/Syncler/Weyd let users install providers
+  // without any of them being hardcoded into the app itself.
+  const ProviderManager = {
+    // Normalize whatever the user pasted into a base URL (strip /manifest.json, trailing slashes)
+    _toBaseUrl(input) {
+      let u = String(input || '').trim();
+      if (!u) return '';
+      if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+      u = u.replace(/\/manifest\.json\/?$/i, '');
+      u = u.replace(/\/+$/, '');
+      return u;
+    },
+    // Fetch + validate a Stremio addon manifest at {baseUrl}/manifest.json.
+    // Returns { ok, name, baseUrl, manifestUrl, description, error }.
+    async fetchManifest(input) {
+      const baseUrl = this._toBaseUrl(input);
+      if (!baseUrl) return { ok: false, error: 'Enter a URL first.' };
+      const manifestUrl = baseUrl + '/manifest.json';
+      vodLog('Provider: fetching manifest', manifestUrl);
+      try {
+        const r = await window.xtream.fetch(manifestUrl, { headers: { 'Accept': 'application/json' } });
+        const status = r.status || r.statusCode;
+        if (status >= 400) {
+          vodErr('Provider manifest fetch failed:', manifestUrl, 'status', status);
+          return { ok: false, error: `Couldn't reach a Stremio addon manifest at this URL (status ${status}). Double-check the address.` };
+        }
+        const manifest = safeJsonParse(r.body, 'Provider manifest');
+        const resources = (manifest.resources || []).map(res => typeof res === 'string' ? res : (res && res.name));
+        const supportsStream = resources.includes('stream');
+        if (!manifest || !manifest.id || !supportsStream) {
+          vodWarn('Provider manifest missing stream resource:', manifestUrl, manifest);
+          return {
+            ok: false,
+            error: `That addon doesn't expose a "stream" resource, so it can't supply playable links for movies/shows. ` +
+                   `(Found resources: ${resources.length ? resources.join(', ') : 'none'}.)`,
+          };
+        }
+        vodLog('Provider manifest OK:', manifest.name || manifest.id, manifestUrl);
+        return {
+          ok: true,
+          name: manifest.name || manifest.id,
+          description: manifest.description || '',
+          baseUrl,
+          manifestUrl,
+        };
+      } catch (e) {
+        vodErr('Provider manifest fetch error:', manifestUrl, e.message || e);
+        return { ok: false, error: `Couldn't load that addon's manifest — ${e.message || e}` };
+      }
+    },
+    // Add a single provider by URL (validates first). Returns { ok, provider?, error? }.
+    async addByUrl(input) {
+      const result = await this.fetchManifest(input);
+      if (!result.ok) return result;
+      const existing = Storage.getProviders().find(p => p.baseUrl === result.baseUrl);
+      if (existing) return { ok: false, error: `"${existing.name}" is already in your provider list.` };
+      const provider = Storage.addProvider(result.name, result.baseUrl, 'manual');
+      return { ok: true, provider };
+    },
+    // Fetch a "repository" — a JSON document listing multiple providers, e.g.
+    //   [{ "name": "My Fork", "url": "https://my-host/manifest.json" }, ...]
+    // or { "providers": [ ... ] }. Returns { ok, entries: [{name,url}], error }.
+    async fetchRepo(input) {
+      let url = String(input || '').trim();
+      if (!url) return { ok: false, error: 'Enter a repository URL first.' };
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      vodLog('Provider repo: fetching', url);
+      try {
+        const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
+        const status = r.status || r.statusCode;
+        if (status >= 400) {
+          vodErr('Provider repo fetch failed:', url, 'status', status);
+          return { ok: false, error: `Couldn't load that repository (status ${status}).` };
+        }
+        const data = safeJsonParse(r.body, 'Provider repository');
+        const raw = Array.isArray(data) ? data : (Array.isArray(data.providers) ? data.providers : null);
+        if (!raw) {
+          return { ok: false, error: 'That URL didn\'t return a recognizable provider list (expected a JSON array, or { "providers": [...] }).' };
+        }
+        const entries = raw.map(e => ({
+          name: (e && (e.name || e.title)) || '',
+          url: (e && (e.url || e.manifestUrl || e.baseUrl)) || '',
+        })).filter(e => e.url);
+        vodLog('Provider repo entries found:', entries.length);
+        return { ok: true, entries };
+      } catch (e) {
+        vodErr('Provider repo fetch error:', url, e.message || e);
+        return { ok: false, error: `Couldn't load that repository — ${e.message || e}` };
+      }
+    },
+  };
 
   const TMDBAPI = {
     BASE: 'https://api.themoviedb.org/3',
@@ -4698,8 +5359,12 @@
       const r = await window.xtream.fetch(this.BASE + path, {
         headers: { 'Authorization': 'Bearer ' + TMDB_TOKEN, 'Content-Type': 'application/json;charset=utf-8' }
       });
-      if (!r.ok && r.status !== 200) throw new Error('TMDB error ' + r.status);
-      return JSON.parse(r.body || '{}');
+      const status = r.status || r.statusCode;
+      if (!r.ok && status !== 200) {
+        vodErr('TMDB request failed:', path, '→ status', status, 'body:', String(r.body || '').slice(0, 300));
+        throw new Error('TMDB error ' + status);
+      }
+      return safeJsonParse(r.body, 'TMDB ' + path);
     },
     async findByImdb(imdbId) {
       const data = await this._get('/find/' + encodeURIComponent(imdbId) + '?external_source=imdb_id');
@@ -4714,6 +5379,72 @@
       const q = '/search/tv?query=' + encodeURIComponent(title) + (year ? '&first_air_date_year=' + encodeURIComponent(year) : '');
       const data = await this._get(q);
       return (data.results && data.results[0]) || null;
+    },
+    // Fetch extended details for a known TMDB id: clearlogo image, runtime,
+    // content certification (e.g. "M", "PG-13"), and release date — everything
+    // the spotlight banner needs beyond the basic search/find result.
+    async movieDetails(id) {
+      return this._get(`/movie/${id}?append_to_response=images,release_dates&include_image_language=en,null`);
+    },
+    async showDetails(id) {
+      return this._get(`/tv/${id}?append_to_response=images,content_ratings&include_image_language=en,null`);
+    },
+    // Pick the best clearlogo (transparent PNG title treatment) from a TMDB
+    // images response: prefer English, fall back to language-less ("null"), then any.
+    pickLogo(images) {
+      const logos = (images && images.logos) || [];
+      if (!logos.length) return '';
+      const byLang = (lang) => logos.find(l => l.iso_639_1 === lang);
+      const best = byLang('en') || byLang(null) || logos[0];
+      return best && best.file_path ? (TMDB_LOGO_IMG + best.file_path) : '';
+    },
+    // US certification, e.g. "PG-13" / "R" / "TV-MA" — falls back to the first
+    // country that has one set if US isn't present.
+    pickCertification(detail, isShow) {
+      if (isShow) {
+        const ratings = (detail.content_ratings && detail.content_ratings.results) || [];
+        const us = ratings.find(r => r.iso_3166_1 === 'US') || ratings.find(r => r.rating);
+        return (us && us.rating) || '';
+      }
+      const dates = (detail.release_dates && detail.release_dates.results) || [];
+      const us = dates.find(r => r.iso_3166_1 === 'US') || dates.find(r => (r.release_dates || []).some(d => d.certification));
+      const cert = us && (us.release_dates || []).map(d => d.certification).find(Boolean);
+      return cert || '';
+    },
+    // Derive a human-readable release status for movies from TMDB's
+    // `release_dates` payload — each entry has a numeric `type`:
+    //   1 = premiere, 2 = theatrical (limited), 3 = theatrical,
+    //   4 = digital, 5 = physical, 6 = TV
+    // We compare each type's earliest date against today to figure out
+    // whether the movie is still in theaters, out digitally/on disc, etc.
+    // Shows don't have this concept, so callers should skip them.
+    pickReleaseStatus(detail) {
+      const countries = (detail.release_dates && detail.release_dates.results) || [];
+      if (!countries.length) return '';
+      const now = Date.now();
+      const earliestOfType = (type) => {
+        let best = null;
+        for (const c of countries) {
+          for (const d of (c.release_dates || [])) {
+            if (d.type !== type || !d.release_date) continue;
+            const t = new Date(d.release_date).getTime();
+            if (!isNaN(t) && (best === null || t < best)) best = t;
+          }
+        }
+        return best;
+      };
+      const theatrical = earliestOfType(3) || earliestOfType(2) || earliestOfType(1);
+      const digital = earliestOfType(4);
+      const physical = earliestOfType(5);
+      const homeRelease = [digital, physical].filter(t => t !== null).sort((a, b) => a - b)[0] || null;
+
+      if (homeRelease !== null && homeRelease <= now) return 'Available to Rent or Buy';
+      if (theatrical !== null && theatrical <= now) {
+        if (homeRelease !== null) return 'In Theaters';
+        return 'In Theaters';
+      }
+      if (theatrical !== null && theatrical > now) return 'Coming Soon';
+      return '';
     },
   };
 
@@ -4737,16 +5468,60 @@
             : await TMDBAPI.searchMovie(title, year).catch(() => null);
         }
         if (!result) return null;
-        return {
+        const isShow = kind === 'show';
+        const meta = {
           poster: result.poster_path ? (TMDB_IMG + result.poster_path) : '',
           backdrop: result.backdrop_path ? (TMDB_BACKDROP_IMG + result.backdrop_path) : '',
           overview: result.overview || '',
           rating: typeof result.vote_average === 'number' ? result.vote_average : 0,
+          logo: '', runtime: 0, certification: '', releaseStatus: '',
+          releaseDate: result.release_date || result.first_air_date || '',
         };
+        // Pull richer details (clearlogo, runtime, certification) in a second
+        // call keyed off the TMDB id we just resolved — best-effort, never blocks the card.
+        try {
+          const detail = isShow ? await TMDBAPI.showDetails(result.id) : await TMDBAPI.movieDetails(result.id);
+          meta.logo = TMDBAPI.pickLogo(detail.images) || '';
+          meta.certification = TMDBAPI.pickCertification(detail, isShow) || '';
+          meta.releaseDate = detail.release_date || detail.first_air_date || meta.releaseDate;
+          if (!isShow) {
+            meta.releaseStatus = TMDBAPI.pickReleaseStatus(detail) || '';
+            meta.runtime = typeof detail.runtime === 'number' ? detail.runtime : 0;
+          } else if (Array.isArray(detail.episode_run_time) && detail.episode_run_time.length) {
+            meta.runtime = detail.episode_run_time[0];
+          }
+        } catch (e) { /* details are a nice-to-have — ignore failures */ }
+        return meta;
       } catch (e) { return null; }
     })();
     _tmdbCache.set(key, p);
     return p;
+  }
+
+  // ---- Spotlight metadata formatting helpers ----
+  function vodFormatRuntime(mins) {
+    mins = Number(mins) || 0;
+    if (!mins) return '';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h && m) return `${h} hr ${m} mins`;
+    if (h) return `${h} hr`;
+    return `${m} mins`;
+  }
+  function vodFormatDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateStr;
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${mm}/${dd}/${d.getFullYear()}`;
+  }
+  // Render a 0–10 TMDB rating as a 5-star glyph string (★ full, ⯨ half, ☆ empty)
+  function vodStarString(rating) {
+    const r = Math.max(0, Math.min(10, Number(rating) || 0)) / 2;
+    const full = Math.floor(r);
+    const half = (r - full) >= 0.5 ? 1 : 0;
+    const empty = 5 - full - half;
+    return '★'.repeat(full) + (half ? '⯨' : '') + '☆'.repeat(empty);
   }
 
   function vodPosterStyle(item) {
@@ -4780,7 +5555,14 @@
       <div class="vod-card-poster" style="${vodPosterStyle(entry)}">${vodPosterStyle(entry) ? '' : escapeHtml(title)}</div>
       <div class="vod-card-title">${escapeHtml(title)}</div>
       <div class="vod-card-sub">${escapeHtml(String(year || ''))}${kind ? ' · ' + kind : ''}</div>`;
-    card.addEventListener('click', () => showVodSpotlight(entry, kind));
+    card.addEventListener('click', () => {
+      vodLog('Card clicked:', { title, year, kind, imdb: vodImdbOf(entry) });
+      try {
+        showVodSpotlight(entry, kind);
+      } catch (e) {
+        vodErr('showVodSpotlight threw:', e && (e.stack || e.message || e));
+      }
+    });
     if (!entry._poster) {
       tmdbLookup(entry, kind).then(meta => {
         if (!meta) return;
@@ -4799,47 +5581,105 @@
     return card;
   }
 
+  function vodRenderSpotlightFields(entry, kind) {
+    const title = vodTitleOf(entry);
+    const overview = vodOverviewOf(entry) || entry._tmdbOverview;
+    const logoEl = $('#vod-spotlight-logo');
+    const titleEl = $('#vod-spotlight-title');
+    if (entry._logo) {
+      logoEl.src = entry._logo;
+      logoEl.style.display = '';
+      titleEl.style.display = 'none';
+    } else {
+      logoEl.style.display = 'none';
+      titleEl.style.display = '';
+      titleEl.textContent = title;
+    }
+    // Meta row: ⓘ · stars · date · certification pill · runtime
+    const year = vodYearOf(entry);
+    const dateStr = vodFormatDate(entry._releaseDate) || (year ? String(year) : '');
+    const runtimeStr = vodFormatRuntime(entry._runtime);
+    const metaParts = [];
+    metaParts.push('<span class="pill">i</span>');
+    if (kind === 'movie' && entry._releaseStatus) {
+      const cls = entry._releaseStatus === 'In Theaters' ? 'in-theaters' : 'on-digital';
+      metaParts.push(`<span class="pill release-status ${cls}">${escapeHtml(entry._releaseStatus)}</span>`);
+    }
+    if (typeof entry._tmdbRating === 'number' && entry._tmdbRating > 0) {
+      metaParts.push(`<span class="stars">${vodStarString(entry._tmdbRating)}</span>`);
+    }
+    if (dateStr) metaParts.push(`<span>${escapeHtml(dateStr)}</span>`);
+    if (entry._certification) metaParts.push(`<span class="pill">${escapeHtml(entry._certification)}</span>`);
+    if (runtimeStr) metaParts.push(`<span>${escapeHtml(runtimeStr)}</span>`);
+    if (!dateStr && !runtimeStr && !entry._certification) {
+      metaParts.push(`<span>${escapeHtml(kind === 'show' ? 'Series' : 'Movie')}</span>`);
+    }
+    $('#vod-spotlight-meta').innerHTML = metaParts.join('<span class="dot"> · </span>');
+    $('#vod-spotlight-overview').textContent = overview || 'No synopsis available.';
+    // Score badges: TMDB rating (e.g. "7.5") + a percent score derived from it
+    const scoresEl = $('#vod-spotlight-scores');
+    if (typeof entry._tmdbRating === 'number' && entry._tmdbRating > 0) {
+      const tmdbScore = entry._tmdbRating.toFixed(1);
+      const percent = Math.round(entry._tmdbRating * 10);
+      scoresEl.innerHTML = `
+        <span class="score"><span class="score-icon tmdb">★</span>${escapeHtml(tmdbScore)}</span>
+        <span class="score"><span class="score-icon percent">%</span>${percent}%</span>`;
+      scoresEl.style.display = '';
+    } else {
+      scoresEl.innerHTML = '';
+      scoresEl.style.display = 'none';
+    }
+  }
+
   function showVodSpotlight(entry, kind) {
+    vodLog('showVodSpotlight:', { title: vodTitleOf(entry), kind, hasPoster: !!entry._poster, hasBackdrop: !!entry._backdrop, hasLogo: !!entry._logo });
     State.vodFocused = { entry, kind };
     const spotEl = $('#vod-spotlight');
+    if (!spotEl) { vodErr('showVodSpotlight: #vod-spotlight element not found in DOM!'); return; }
     // Scroll the spotlight into view so clicking a card from a lower rail
     // visibly shows the selected title — otherwise it just updates off-screen.
     if (spotEl) setTimeout(() => { try { spotEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 0);
-    const title = vodTitleOf(entry);
-    const year = vodYearOf(entry);
-    const overview = vodOverviewOf(entry) || entry._tmdbOverview;
     $('#vod-spotlight').style.display = '';
-    $('#vod-spotlight-title').textContent = title;
-    $('#vod-spotlight-meta').textContent = [year, kind === 'show' ? 'Series' : 'Movie'].filter(Boolean).join(' · ');
-    $('#vod-spotlight-overview').textContent = overview || 'No synopsis available.';
+    vodRenderSpotlightFields(entry, kind);
     const bg = $('#vod-spotlight-bg');
     bg.style.backgroundImage = entry._backdrop ? `url('${entry._backdrop}')` : (entry._poster ? `url('${entry._poster}')` : '');
-    if (!entry._backdrop || !entry._tmdbOverview) {
+    const needsLookup = !entry._backdrop || !entry._tmdbOverview || entry._logo === undefined || entry._runtime === undefined;
+    if (needsLookup) {
       tmdbLookup(entry, kind).then(meta => {
         if (!meta || !State.vodFocused || State.vodFocused.entry !== entry) return;
         if (meta.poster) entry._poster = meta.poster;
         if (meta.backdrop) entry._backdrop = meta.backdrop;
         if (meta.overview && !entry._tmdbOverview) entry._tmdbOverview = meta.overview;
+        if (typeof meta.rating === 'number') entry._tmdbRating = meta.rating;
+        entry._logo = meta.logo || entry._logo || '';
+        entry._runtime = meta.runtime || entry._runtime || 0;
+        entry._certification = meta.certification || entry._certification || '';
+        entry._releaseDate = meta.releaseDate || entry._releaseDate || '';
+        entry._releaseStatus = meta.releaseStatus || entry._releaseStatus || '';
         if (entry._backdrop) bg.style.backgroundImage = `url('${entry._backdrop}')`;
         else if (entry._poster) bg.style.backgroundImage = `url('${entry._poster}')`;
-        if (!vodOverviewOf(entry) && entry._tmdbOverview) $('#vod-spotlight-overview').textContent = entry._tmdbOverview;
+        vodRenderSpotlightFields(entry, kind);
       });
     }
   }
 
   $('#vod-spotlight-play').addEventListener('click', () => {
     const f = State.vodFocused;
-    if (!f) return;
+    vodLog('Play button clicked. Focused entry:', f && { title: vodTitleOf(f.entry), kind: f.kind, imdb: vodImdbOf(f.entry) });
+    if (!f) { vodWarn('Play clicked but nothing is focused (State.vodFocused is empty).'); return; }
     const imdb = vodImdbOf(f.entry);
     if (!Storage.isRealDebridConnected()) {
+      vodWarn('Play blocked: Real-Debrid not connected.');
       toast('Connect Real-Debrid in Settings → VOD Integrations to play titles.');
       return;
     }
     if (!imdb) {
+      vodWarn('Play blocked: no IMDb ID resolvable for entry', f.entry);
       toast("Couldn't resolve an IMDb ID for this title — try connecting Trakt for richer metadata.");
       return;
     }
     if (f.kind === 'show') {
+      vodWarn('Play blocked: series playback not yet supported.');
       toast('Series playback is coming soon — movies are supported first.');
       return;
     }
@@ -4847,27 +5687,67 @@
   });
 
   /* ---- Stream sourcing: Torrentio / AIOStreams ---- */
+  // Generic engine: queries every enabled provider (in priority order) via the
+  // standard Stremio addon route {baseUrl}/stream/{type}/{imdbId}.json, then
+  // aggregates results. No scraper is hardcoded — providers are entirely
+  // user-supplied (see ProviderManager / Settings → Stream providers). One bad
+  // source logs an error and is skipped; the rest still return results.
   const StreamScrapers = {
-    async queryMovie(imdbId) {
-      const source = Storage.getScraperSource();
-      const url = (source === 'aiostreams')
-        ? `https://aiostreams.elfhosted.com/stream/movie/${imdbId}.json`
-        : `https://torrentio.strem.fun/stream/movie/${imdbId}.json`;
-      try {
-        const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
-        const data = JSON.parse(r.body || '{}');
-        return Array.isArray(data.streams) ? data.streams : [];
-      } catch (e) {
-        if (source === 'aiostreams') {
-          // AIOStreams instances vary by user manifest — fall back to Torrentio.
-          toast('AIOStreams lookup failed — falling back to Torrentio.');
-          const r2 = await window.xtream.fetch(`https://torrentio.strem.fun/stream/movie/${imdbId}.json`, { headers: { 'Accept': 'application/json' } });
-          const data2 = JSON.parse(r2.body || '{}');
-          return Array.isArray(data2.streams) ? data2.streams : [];
-        }
-        throw e;
+    async _queryProvider(provider, type, imdbId) {
+      const url = `${provider.baseUrl}/stream/${type}/${imdbId}.json`;
+      vodLog('Querying provider:', provider.name, url);
+      const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
+      const status = r.status || r.statusCode;
+      vodLog('Provider response:', provider.name, '→ status', status, 'bytes:', (r.body || '').length);
+      if (status >= 400) {
+        vodErr('Provider returned an error status:', provider.name, status, 'body:', String(r.body || '').slice(0, 300));
       }
-    }
+      const data = safeJsonParse(r.body, `Provider (${provider.name})`);
+      const streams = Array.isArray(data.streams) ? data.streams : [];
+      vodLog('Provider streams found:', provider.name, streams.length);
+      // Tag each stream with its source provider so the UI/Real-Debrid layer
+      // can show where it came from and so duplicates can be told apart.
+      return streams.map(s => Object.assign({ _providerName: provider.name, _providerId: provider.id }, s));
+    },
+    async _queryAll(type, imdbId) {
+      const providers = Storage.getEnabledProviders();
+      if (!providers.length) {
+        vodWarn('No stream providers are enabled — add one in Settings → Stream providers.');
+        toast('No stream providers configured — add one in Settings to find playable links.');
+        return [];
+      }
+      const results = [];
+      let anySucceeded = false;
+      for (const provider of providers) {
+        try {
+          const streams = await this._queryProvider(provider, type, imdbId);
+          anySucceeded = true;
+          results.push(...streams);
+        } catch (e) {
+          vodErr('Provider failed, skipping:', provider.name, e.message || e);
+        }
+      }
+      if (!anySucceeded) {
+        // A common cause: the only enabled provider(s) are currently behind a
+        // Cloudflare challenge the in-app bypass can't solve (this happens to
+        // Torrentio periodically). Point the user at the fix — add another
+        // provider — rather than leaving them stuck on a dead source.
+        vodWarn('All enabled providers failed — they may be Cloudflare-blocked or down. ' +
+                'Try adding another provider in Settings → Stream providers (search "Stremio addons" ' +
+                'for currently-working manifest URLs — e.g. MediaFusion, Comet, Nuvio Streams).');
+        toast('All stream providers failed to respond (likely Cloudflare-blocked or down) — ' +
+              'try adding another provider in Settings → Stream providers.', 6000);
+      }
+      vodLog('Combined provider streams:', results.length, 'from', providers.length, 'provider(s)');
+      return results;
+    },
+    async queryMovie(imdbId) {
+      return this._queryAll('movie', imdbId);
+    },
+    async querySeries(imdbId, season, episode) {
+      const id = (season != null && episode != null) ? `${imdbId}:${season}:${episode}` : imdbId;
+      return this._queryAll('series', id);
+    },
   };
 
   function parseStreamResult(s) {
@@ -4962,10 +5842,16 @@
     async _call(path, opts = {}) {
       const token = await this._bearerToken();
       const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
+      vodLog('Real-Debrid request:', opts.method || 'GET', path);
       const r = await window.xtream.fetch(this.BASE + path, Object.assign({}, opts, { headers }));
       const status = r.status || r.statusCode;
-      if (status >= 400) throw new Error('Real-Debrid error ' + status + (r.body ? (': ' + r.body.slice(0, 160)) : ''));
-      return r.body ? JSON.parse(r.body) : null;
+      vodLog('Real-Debrid response:', path, '→ status', status, 'bytes:', (r.body || '').length);
+      if (status >= 400) {
+        vodErr('Real-Debrid error:', path, status, 'body:', String(r.body || '').slice(0, 300));
+        throw new Error('Real-Debrid error ' + status + (r.body ? (': ' + r.body.slice(0, 160)) : ''));
+      }
+      if (!r.body) return null;
+      return safeJsonParse(r.body, 'Real-Debrid ' + path);
     },
     addMagnet(magnet) {
       return this._call('/torrents/addMagnet', {
@@ -4998,9 +5884,11 @@
   async function debridResolve(parsedStream, onStatus) {
     if (!parsedStream.infoHash) throw new Error('This result has no torrent hash to send to Real-Debrid.');
     const magnet = magnetFromInfoHash(parsedStream.infoHash, parsedStream.title);
+    vodLog('debridResolve: magnet built from infoHash', parsedStream.infoHash);
 
     onStatus('Adding to Real-Debrid…');
     const added = await RealDebridAPI.addMagnet(magnet);
+    vodLog('addMagnet result:', added);
     const torrentId = added && added.id;
     if (!torrentId) throw new Error('Real-Debrid did not return a torrent ID.');
 
@@ -5048,26 +5936,33 @@
   }
 
   async function resolveAndPlayMovie(imdbId, title) {
+    vodLog('resolveAndPlayMovie start:', { imdbId, title });
     toast('Looking for streams for "' + title + '"…', 8000);
     try {
       const raw = await StreamScrapers.queryMovie(imdbId);
+      vodLog('Raw scraper results:', raw.length);
       if (!raw.length) { toast('No streams found for "' + title + '".'); return; }
       const parsed = raw.map(parseStreamResult).filter(p => p.infoHash);
+      vodLog('Parsed results with usable torrent hashes:', parsed.length, '/', raw.length);
       if (!parsed.length) { toast('Found results, but none were usable torrents.'); return; }
 
       let chosen;
       if (Storage.getAutoPickStream()) {
         chosen = pickBestStream(parsed);
+        vodLog('Auto-picked stream:', chosen && chosen.title);
       } else {
         chosen = await showStreamPickerModal(parsed);
-        if (!chosen) return;
+        if (!chosen) { vodLog('User cancelled stream picker.'); return; }
+        vodLog('User-picked stream:', chosen && chosen.title);
       }
 
       toast('Resolving via Real-Debrid…', 8000);
-      const url = await debridResolve(chosen, (msg) => toast(msg, 8000));
+      const url = await debridResolve(chosen, (msg) => { vodLog('Debrid status:', msg); toast(msg, 8000); });
+      vodLog('Resolved playable URL (Real-Debrid):', url);
       playVodUrl(url, title);
       toast('Now playing: ' + title);
     } catch (e) {
+      vodErr('resolveAndPlayMovie failed:', { imdbId, title }, e && (e.stack || e.message || e));
       toast('Playback failed: ' + (e.message || String(e)));
     }
   }
@@ -5085,6 +5980,40 @@
     return wrap;
   }
 
+  // Renders a tab bar + a single horizontally-scrolling poster row beneath it.
+  // Clicking a tab swaps which list of items fills that one row — this keeps
+  // the VOD screen a fixed size (only the row scrolls left/right) instead of
+  // stacking multiple rails and scrolling the whole page vertically.
+  // `sections`: [{ title, items, kind }, ...] — empty-item sections are skipped.
+  function vodTabbedRail(sections) {
+    const usable = sections.filter(s => s && Array.isArray(s.items) && s.items.length);
+    if (!usable.length) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'vod-tabbed-rail';
+    const tabs = document.createElement('div');
+    tabs.className = 'vod-rail-tabs';
+    const track = document.createElement('div');
+    track.className = 'vod-rail-track';
+
+    function showTab(idx) {
+      $$('button', tabs).forEach((b, i) => b.classList.toggle('active', i === idx));
+      track.innerHTML = '';
+      usable[idx].items.forEach(entry => track.appendChild(vodCard(entry, usable[idx].kind)));
+      track.scrollLeft = 0;
+    }
+    usable.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = s.title;
+      btn.addEventListener('click', () => showTab(i));
+      tabs.appendChild(btn);
+    });
+    wrap.appendChild(tabs);
+    wrap.appendChild(track);
+    showTab(0);
+    return wrap;
+  }
+
   function vodEmptyState() {
     const div = document.createElement('div');
     div.className = 'vod-empty';
@@ -5096,7 +6025,7 @@
     return div;
   }
 
-  let _vodSection = 'home';
+  let _vodSection = 'movies';
   async function renderVodSection(section) {
     _vodSection = section;
     $$('#vod-hub button').forEach(b => b.classList.toggle('active', b.dataset.vodSection === section));
@@ -5127,28 +6056,37 @@
           TraktAPI.trendingShows().catch(() => []),
         ]);
         if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
-        if (trendM.length) rails.appendChild(vodRail('Trending Movies', trendM, 'movie'));
-        if (trendS.length) rails.appendChild(vodRail('Trending Shows', trendS, 'show'));
-        if (popM.length) rails.appendChild(vodRail('Popular Movies', popM, 'movie'));
-        if (!trendM.length && !trendS.length && !popM.length) rails.appendChild(vodEmptyState());
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Movies', items: trendM, kind: 'movie' },
+          { title: 'Trending Shows', items: trendS, kind: 'show' },
+          { title: 'Popular Movies', items: popM, kind: 'movie' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
       } else if (section === 'movies') {
         const [trendM, popM] = await Promise.all([
           TraktAPI.trendingMovies().catch(() => []),
           TraktAPI.popularMovies().catch(() => []),
         ]);
         if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
-        if (trendM.length) rails.appendChild(vodRail('Trending Movies', trendM, 'movie'));
-        if (popM.length) rails.appendChild(vodRail('Popular Movies', popM, 'movie'));
-        if (!trendM.length && !popM.length) rails.appendChild(vodEmptyState());
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Movies', items: trendM, kind: 'movie' },
+          { title: 'Popular Movies', items: popM, kind: 'movie' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
       } else if (section === 'shows') {
         const [trendS, popS] = await Promise.all([
           TraktAPI.trendingShows().catch(() => []),
           TraktAPI.popularShows().catch(() => []),
         ]);
         if (trendS[0]) showVodSpotlight(trendS[0], 'show');
-        if (trendS.length) rails.appendChild(vodRail('Trending Shows', trendS, 'show'));
-        if (popS.length) rails.appendChild(vodRail('Popular Shows', popS, 'show'));
-        if (!trendS.length && !popS.length) rails.appendChild(vodEmptyState());
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Shows', items: trendS, kind: 'show' },
+          { title: 'Popular Shows', items: popS, kind: 'show' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
       } else if (section === 'search') {
         rails.innerHTML = '<div class="vod-empty">Type a title above and press Enter to search.</div>';
       }
@@ -5175,9 +6113,12 @@
           rails.innerHTML = '';
           const movies = results.filter(r => r.movie).map(r => r.movie ? { movie: r.movie } : r);
           const shows  = results.filter(r => r.show).map(r => r.show ? { show: r.show } : r);
-          if (movies.length) rails.appendChild(vodRail('Movies', movies, 'movie'));
-          if (shows.length) rails.appendChild(vodRail('Shows', shows, 'show'));
-          if (!movies.length && !shows.length) rails.innerHTML = '<div class="vod-empty">No results found.</div>';
+          const tabbed = vodTabbedRail([
+            { title: 'Movies', items: movies, kind: 'movie' },
+            { title: 'Shows', items: shows, kind: 'show' },
+          ]);
+          if (tabbed) rails.appendChild(tabbed);
+          else rails.innerHTML = '<div class="vod-empty">No results found.</div>';
         } catch (e) {
           rails.innerHTML = '<div class="vod-empty">Search failed: ' + escapeHtml(e.message || String(e)) + '</div>';
         }
@@ -6549,6 +7490,12 @@
     if (window.xtream && window.xtream.onCastLog) {
       window.xtream.onCastLog(msg => console.log('%c[Cast]', 'color:#7ab4ff', msg));
     }
+    if (window.xtream && window.xtream.onNetLog) {
+      // Surfaces Cloudflare-bypass activity (which runs in the main process)
+      // directly in the renderer DevTools console, so it shows up alongside
+      // "[VOD]" lines and in any console log the user copies/exports to us.
+      window.xtream.onNetLog(msg => console.log('%c[netFetch]', 'color:#f0a868', msg));
+    }
     State.player.onLoading = (b) => setLoading(b, 'Buffering…');
     State.player.onError = (msg) => {
       setLoading(false);
@@ -6750,7 +7697,9 @@
     }
     updateRuntimeAndLive();
     updateSignalBars();
-    setInterval(() => { updateRuntimeAndLive(); updateSignalBars(); }, 1000);
+    // Only do per-second player/runtime work while actually in Live TV mode —
+    // avoids touching the (possibly torn-down) video element while in VOD.
+    setInterval(() => { if (State.mode === 'live') { updateRuntimeAndLive(); updateSignalBars(); } }, 1000);
 
     $('#btn-live').addEventListener('click', () => {
       if (!State.player || !State.player.video) return;
@@ -6792,16 +7741,12 @@
       });
     }
 
-    // Render initial connect screen
+    // Pre-render the server list (used once the user picks Live TV) but don't
+    // show the connect screen yet — the very first thing the user sees is the
+    // Live TV / Video On Demand launcher. VOD doesn't need a server at all,
+    // so the connect screen only ever appears after choosing Live TV.
     renderServerList();
-
-    // Auto-connect to active server if exists
-    const active = Storage.activeServer();
-    if (active) {
-      connectToServer(active);
-    } else {
-      showConnect();
-    }
+    showModeLauncher();
 
     // Window resize — keep guide responsive
     window.addEventListener('resize', debounce(() => {

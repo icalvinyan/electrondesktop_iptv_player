@@ -3,16 +3,87 @@ Run these in Terminal (in the iptv-player-v2 folder):
 cd ~/Documents/Claude/Projects/iptv-player-v2
 rm -f .git/index.lock .git/HEAD.lock
 git add -A
-git commit -m "Bake Trakt + TMDB API credentials into the app; add poster/backdrop artwork via TMDB"
+git commit -m "Replace hardcoded scraper with user-managed provider/repository system; relocate VOD nav; fix spotlight banner; surface Cloudflare-bypass logs in DevTools"
 git push
 
 Then quit the running Xtream TV app completely and relaunch it
 (npm start, or rebuild the DMG per REBUILD_DMG.txt) to pick up the change.
+NOTE: some of these changes touch main.js (the Electron main process), so a
+full quit-and-relaunch (not just a page reload) is required for them to take effect.
 
-You should now see:
-- "Connect Trakt" go straight to a QR code + short code, no Client ID/Secret fields
-- VOD cards and the spotlight banner showing real poster/backdrop artwork
-  pulled from TMDB (may take a moment to load in as each title is looked up)
+WHAT'S NEW IN THIS BUILD
+========================
+
+1. NO SCRAPER IS HARDCODED INTO THE APP ANYMORE
+   Torrentio (and AIOStreams) used to be baked in, and Torrentio's Cloudflare
+   protection was actively blocking this app's requests (403 "Attention
+   Required"). Rather than fight that indefinitely, the VOD layer has been
+   rebuilt around a "provider" system — the same approach apps like
+   Cloudstream/Syncler/Weyd use:
+     • The app itself is just a player + metadata browser.
+     • YOU choose which stream sources ("providers") to use, by pasting a URL
+       in Settings. Nothing is pre-installed.
+   This also means if one source gets blocked or shuts down, you can simply
+   swap in another — no app update required.
+
+2. HOW TO ADD PROVIDERS (Settings → Stream providers)
+   A "provider" is any source that speaks the standard Stremio-addon protocol
+   (a `manifest.json` exposing a `stream` resource for movies/shows — this is
+   a widely-used open format, so lots of community addons are compatible).
+   You can add them two ways:
+     • Single provider — paste a manifest URL or base URL (e.g.
+       "https://example.org/manifest.json" or just "https://example.org") into
+       the "Add provider" box and click Add. The app fetches and validates the
+       manifest, confirms it can supply streams, and adds it to your list.
+     • Repository (bulk add) — paste a URL to a JSON file listing multiple
+       providers (an array of {"name","url"} entries, or {"providers":[...]})
+       into the "Add from repository" box. The app validates and adds every
+       entry it can.
+   Search online for "Stremio addons" to find sources — if you previously used
+   Torrentio or AIOStreams successfully, you can add them back the same way
+   (e.g. paste "https://torrentio.strem.fun" or "https://aiostreams.elfhosted.com").
+
+   NOTE: if you upgraded from an older version that had a fixed Torrentio/
+   AIOStreams dropdown, your prior choice was automatically migrated into
+   your provider list on first launch — check Settings to confirm/adjust it.
+
+3. MANAGING PROVIDERS
+   Each provider in your list shows its name and URL, with:
+     • An "enabled" checkbox — disable a provider without removing it.
+     • A "Remove" button.
+     • Drag-to-reorder — providers are queried top to bottom; the order is
+       your fallback priority (first provider's results show first).
+   When you tap Play on a movie/show, the app queries every ENABLED provider
+   in order, combines whatever streams come back, and lets you choose (or
+   auto-picks the best one, per the "When multiple stream results are found"
+   setting). If one provider is down or blocked, the others still work — you
+   just see fewer results, plus an error logged to the console for that source.
+
+4. OTHER CHANGES IN THIS BUILD
+   - VOD nav cleanup: the "VOD" tab no longer appears inside Live TV (use the
+     mode launcher / ⇄ switcher instead), the server selector and channel
+     search no longer appear while in VOD mode, and the Home / Movies / Shows
+     tabs now live in the top bar for VOD.
+   - Fixed the VOD spotlight banner being too dark/barely visible — backdrop
+     artwork now shows through clearly with a softer gradient overlay.
+   - Cloudflare-bypass activity (the hidden-window challenge solver) now logs
+     directly to the DevTools console with an orange "[netFetch]" prefix, so
+     you can see exactly what's happening when a source is blocked, instead of
+     only the launching terminal.
+
+DEBUGGING "nothing happens" / playback errors
+==============================================
+All VOD actions log to the DevTools console with a "[VOD]" prefix — card
+clicks, spotlight updates, provider queries (one line per provider, e.g.
+"[VOD] Querying provider: <name> <url>"), Real-Debrid calls, and any JSON-parse
+failures (which log the raw response so we can see what was actually returned,
+e.g. an HTML error/Cloudflare page instead of JSON). Cloudflare-bypass attempts
+show up as orange "[netFetch]" lines.
+
+To open DevTools in the running app: View menu → Toggle Developer Tools, or
+Cmd+Option+I. Click the Console tab, then click a movie card / Play, and copy
+back any "[VOD]" / "[netFetch]" lines (especially red error lines) — that'll
+show exactly where it's breaking, and for which provider.
 
 (No need for "-u origin feature/vod-tab" — the branch is already
 tracking origin from the last push.)

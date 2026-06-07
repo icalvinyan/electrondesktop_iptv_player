@@ -31,6 +31,14 @@ contextBridge.exposeInMainWorld('xtream', {
     ipcRenderer.on('cast:log', h);
     return () => ipcRenderer.removeListener('cast:log', h);
   },
+  // Net/Cloudflare-bypass log lines from the main process — forwarded so they
+  // show up in the renderer DevTools console (and in exported console logs)
+  // instead of only the launching terminal's stdout.
+  onNetLog: (cb) => {
+    const h = (_evt, msg) => cb(msg);
+    ipcRenderer.on('net:log', h);
+    return () => ipcRenderer.removeListener('net:log', h);
+  },
   // Local transcode — HEVC→H.264 HLS for the in-app player
   localTranscode:     (url) => ipcRenderer.invoke('local:startTranscode', url),
   localTranscodeStop: ()    => ipcRenderer.invoke('local:stopTranscode'),
