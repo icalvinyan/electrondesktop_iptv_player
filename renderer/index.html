@@ -1701,15 +1701,13 @@
           <summary>VOD Integrations (Real-Debrid / Trakt)</summary>
           <div style="margin-top:10px; display:flex; flex-direction:column; gap:14px;">
             <div>
-              <label>Real-Debrid API token</label>
-              <div style="display:flex; gap:8px;">
-                <input type="password" id="s-rd-key" placeholder="Paste your Real-Debrid API token" style="flex:1;">
-                <button id="btn-rd-save">Save</button>
+              <label>Real-Debrid</label>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <span id="s-rd-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                <button id="btn-rd-connect">Log in to Real-Debrid</button>
+                <button id="btn-rd-disconnect" class="danger" style="display:none;">Disconnect</button>
               </div>
-              <div style="margin-top:6px; font-size:12px; color:var(--muted);">
-                <span id="s-rd-status">Not connected</span> ·
-                <a href="https://real-debrid.com/apitoken" target="_blank" rel="noopener" style="color:var(--accent);">Get your token</a>
-              </div>
+              <div id="s-rd-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
             </div>
             <div>
               <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
@@ -1853,14 +1851,17 @@
       this._data.lastChannel     = this._data.lastChannel     || {};
       this._data.serverFavorites = this._data.serverFavorites || [];
       this._data.integrations    = Object.assign({
-        realDebrid:    { apiKey: '' },
+        realDebrid:    { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
         trakt:         { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
         scraperSource: 'torrentio',   // 'torrentio' | 'aiostreams'
         autoPickStream: false,
         vodWatched:    {},            // { [imdbId]: { progress, lastWatchedAt, ... } } — local watch history fallback
       }, this._data.integrations || {});
       // Defensive sub-merges in case of older partial saves
-      this._data.integrations.realDebrid = Object.assign({ apiKey: '' }, this._data.integrations.realDebrid || {});
+      this._data.integrations.realDebrid = Object.assign(
+        { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        this._data.integrations.realDebrid || {}
+      );
       this._data.integrations.trakt = Object.assign(
         { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
         this._data.integrations.trakt || {}
@@ -1983,7 +1984,20 @@
       this.save();
     },
     getRealDebridKey() { return this._data.integrations.realDebrid.apiKey || ''; },
-    isRealDebridConnected() { return !!this.getRealDebridKey(); },
+    setRealDebridTokens(patch) {
+      Object.assign(this._data.integrations.realDebrid, patch);
+      this.save();
+    },
+    getRealDebrid() { return this._data.integrations.realDebrid; },
+    // Connected if we have either a pasted legacy API key OR a logged-in OAuth token.
+    isRealDebridConnected() {
+      const rd = this._data.integrations.realDebrid;
+      return !!(rd && (rd.accessToken || rd.apiKey));
+    },
+    disconnectRealDebrid() {
+      this._data.integrations.realDebrid = { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 };
+      this.save();
+    },
 
     setTraktTokens(patch) {
       Object.assign(this._data.integrations.trakt, patch);
@@ -4424,15 +4438,32 @@
 
   /* ---- VOD integrations panel (Real-Debrid / Trakt / scraper prefs) ---- */
   let _traktPollTimer = null;
+  let _rdPollTimer = null;
   function stopTraktPoll() { if (_traktPollTimer) { clearInterval(_traktPollTimer); _traktPollTimer = null; } }
+  function stopRdPoll() { if (_rdPollTimer) { clearInterval(_rdPollTimer); _rdPollTimer = null; } }
+
+  // Renders a scannable QR code for a URL via a public QR image service — no
+  // local QR library needed; just an <img> pointing at the encoded data.
+  function qrImg(data, size) {
+    size = size || 160;
+    const src = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + encodeURIComponent(data);
+    return `<img src="${src}" width="${size}" height="${size}" alt="QR code" style="border-radius:8px; background:#fff; padding:6px;">`;
+  }
 
   function renderIntegrationsPanel() {
     const it = Storage.integrations();
 
     // Real-Debrid
-    $('#s-rd-key').value = Storage.getRealDebridKey();
-    $('#s-rd-status').textContent = Storage.isRealDebridConnected() ? 'Connected' : 'Not connected';
-    $('#s-rd-status').style.color = Storage.isRealDebridConnected() ? 'var(--accent)' : 'var(--muted)';
+    const rdConnected = Storage.isRealDebridConnected();
+    $('#s-rd-status').textContent = rdConnected ? 'Connected' : 'Not connected';
+    $('#s-rd-status').style.color = rdConnected ? 'var(--accent)' : 'var(--muted)';
+    $('#btn-rd-connect').style.display = rdConnected ? 'none' : '';
+    $('#btn-rd-disconnect').style.display = rdConnected ? '' : 'none';
+    if (rdConnected) {
+      stopRdPoll();
+      $('#s-rd-device-area').style.display = 'none';
+      $('#s-rd-device-area').innerHTML = '';
+    }
 
     // Trakt
     $('#s-trakt-client-id').value = it.trakt.clientId || '';
@@ -4453,10 +4484,101 @@
     $('#s-autopick').value = Storage.getAutoPickStream() ? 'on' : 'off';
   }
 
-  $('#btn-rd-save').addEventListener('click', () => {
-    Storage.setRealDebridKey($('#s-rd-key').value);
+  $('#btn-rd-disconnect').addEventListener('click', () => {
+    stopRdPoll();
+    Storage.disconnectRealDebrid();
     renderIntegrationsPanel();
-    toast(Storage.isRealDebridConnected() ? 'Real-Debrid token saved.' : 'Real-Debrid token cleared.');
+    toast('Real-Debrid disconnected.');
+  });
+
+  $('#btn-rd-connect').addEventListener('click', async () => {
+    // Real-Debrid's "open source" client_id — pre-authorized for the device-code
+    // flow so users just log in via real-debrid.com/device (or a QR code) instead
+    // of generating and pasting an API token. Used by community apps like Debrid
+    // Media Manager. See https://api.real-debrid.com/ (OAuth2 for open source apps).
+    const OPEN_SOURCE_CLIENT_ID = 'X245A4XAIBGVM';
+    const area = $('#s-rd-device-area');
+    area.style.display = '';
+    area.innerHTML = '<div style="color:var(--muted)">Requesting login code…</div>';
+    stopRdPoll();
+
+    try {
+      const codeRes = await window.xtream.fetch(
+        `https://api.real-debrid.com/oauth/v2/device/code?client_id=${OPEN_SOURCE_CLIENT_ID}&new_credentials=yes`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+      const codeData = JSON.parse(codeRes.body || '{}');
+      if (!codeData.device_code) throw new Error('No device code returned.');
+
+      const verifyUrl = codeData.verification_url || 'https://real-debrid.com/device';
+      area.innerHTML = `
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          ${qrImg(verifyUrl)}
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div>Scan the QR code, or go to <a href="${verifyUrl}" target="_blank" rel="noopener" style="color:var(--accent);">${escapeHtml(verifyUrl.replace(/^https?:\/\//,''))}</a> and log in with your Real-Debrid account, then enter:</div>
+            <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
+            <div id="s-rd-poll-status" style="color:var(--muted);">Waiting for you to log in…</div>
+          </div>
+        </div>`;
+
+      const interval = Math.max(2, codeData.interval || 5) * 1000;
+      const expiresAt = Date.now() + (codeData.expires_in || 1800) * 1000;
+      let credentials = null; // { client_id, client_secret } — issued to this device once authorized
+
+      _rdPollTimer = setInterval(async () => {
+        if (Date.now() > expiresAt) {
+          stopRdPoll();
+          const st = $('#s-rd-poll-status'); if (st) st.textContent = 'Code expired — click Log in to Real-Debrid to try again.';
+          return;
+        }
+        try {
+          if (!credentials) {
+            // Step 1: poll for the per-device client_id/secret once the user authorizes.
+            const credRes = await window.xtream.fetch(
+              `https://api.real-debrid.com/oauth/v2/device/credentials?client_id=${OPEN_SOURCE_CLIENT_ID}&code=${encodeURIComponent(codeData.device_code)}`,
+              { headers: { 'Accept': 'application/json' } }
+            );
+            const credStatus = credRes.status || credRes.statusCode;
+            if (credStatus === 200) {
+              const cred = JSON.parse(credRes.body || '{}');
+              if (cred.client_id && cred.client_secret) {
+                credentials = cred;
+                const st = $('#s-rd-poll-status'); if (st) st.textContent = 'Logged in — finishing up…';
+              }
+            }
+            // 400/etc while pending — keep waiting
+            return;
+          }
+          // Step 2: exchange device_code + issued credentials for an access token.
+          const tokRes = await window.xtream.fetch('https://api.real-debrid.com/oauth/v2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+            body: new URLSearchParams({
+              client_id: credentials.client_id,
+              client_secret: credentials.client_secret,
+              code: codeData.device_code,
+              grant_type: 'http://oauth.net/grant_type/device/1.0'
+            }).toString()
+          });
+          const tokStatus = tokRes.status || tokRes.statusCode;
+          if (tokStatus === 200) {
+            const tok = JSON.parse(tokRes.body || '{}');
+            stopRdPoll();
+            Storage.setRealDebridTokens({
+              clientId: credentials.client_id,
+              clientSecret: credentials.client_secret,
+              accessToken: tok.access_token || '',
+              refreshToken: tok.refresh_token || '',
+              expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+            });
+            renderIntegrationsPanel();
+            toast('Real-Debrid connected!');
+          }
+        } catch (e) { /* ignore transient poll errors */ }
+      }, interval);
+    } catch (e) {
+      area.innerHTML = `<div style="color:var(--danger, #e55);">Couldn't start Real-Debrid login: ${escapeHtml(e.message || String(e))}</div>`;
+    }
   });
 
   $('#s-scraper-source').addEventListener('change', () => {
@@ -4497,10 +4619,13 @@
       if (!codeData.device_code) throw new Error('No device code returned.');
 
       area.innerHTML = `
-        <div style="display:flex; flex-direction:column; gap:6px;">
-          <div>Go to <a href="https://trakt.tv/activate" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/activate</a> and enter this code:</div>
-          <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
-          <div id="s-trakt-poll-status" style="color:var(--muted);">Waiting for authorization…</div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          ${qrImg(codeData.verification_url || 'https://trakt.tv/activate')}
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div>Scan the QR code, or go to <a href="https://trakt.tv/activate" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/activate</a> and enter this code:</div>
+            <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
+            <div id="s-trakt-poll-status" style="color:var(--muted);">Waiting for authorization…</div>
+          </div>
         </div>`;
 
       const interval = Math.max(2, codeData.interval || 5) * 1000;
@@ -4717,10 +4842,46 @@
   /* ---- Real-Debrid client ---- */
   const RealDebridAPI = {
     BASE: 'https://api.real-debrid.com/rest/1.0',
+    async _bearerToken() {
+      const rd = Storage.getRealDebrid();
+      // Logged in via the QR/device-code flow — refresh the access token if it's
+      // expired (or about to be) using the per-device credentials we were issued.
+      if (rd.accessToken && rd.refreshToken && rd.clientId && rd.clientSecret) {
+        if (!rd.expiresAt || Date.now() > (rd.expiresAt - 60000)) {
+          try {
+            const r = await window.xtream.fetch('https://api.real-debrid.com/oauth/v2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+              body: new URLSearchParams({
+                client_id: rd.clientId,
+                client_secret: rd.clientSecret,
+                code: rd.refreshToken,
+                grant_type: 'http://oauth.net/grant_type/device/1.0'
+              }).toString()
+            });
+            if ((r.status || r.statusCode) === 200) {
+              const tok = JSON.parse(r.body || '{}');
+              if (tok.access_token) {
+                Storage.setRealDebridTokens({
+                  accessToken: tok.access_token,
+                  refreshToken: tok.refresh_token || rd.refreshToken,
+                  expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+                });
+                return tok.access_token;
+              }
+            }
+          } catch (e) { /* fall through and try the existing token anyway */ }
+        }
+        return rd.accessToken;
+      }
+      // Legacy: a manually-pasted static API token still works.
+      if (rd.apiKey) return rd.apiKey;
+      if (rd.accessToken) return rd.accessToken;
+      throw new Error('Real-Debrid is not connected.');
+    },
     async _call(path, opts = {}) {
-      const key = Storage.getRealDebridKey();
-      if (!key) throw new Error('No Real-Debrid token configured.');
-      const headers = Object.assign({ 'Authorization': 'Bearer ' + key }, opts.headers || {});
+      const token = await this._bearerToken();
+      const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
       const r = await window.xtream.fetch(this.BASE + path, Object.assign({}, opts, { headers }));
       const status = r.status || r.statusCode;
       if (status >= 400) throw new Error('Real-Debrid error ' + status + (r.body ? (': ' + r.body.slice(0, 160)) : ''));

@@ -1,0 +1,12 @@
+Run these in Terminal (in the iptv-player-v2 folder):
+
+cd ~/Documents/Claude/Projects/iptv-player-v2
+rm -f .git/index.lock .git/HEAD.lock
+git add -A
+git commit -m "Replace Real-Debrid API token paste with QR/device-code login; add QR codes to Trakt connect flow"
+git push
+
+(No need for "-u origin feature/vod-tab" this time — the branch is already
+tracking origin from the last push.)
+
+You can delete this file afterward.

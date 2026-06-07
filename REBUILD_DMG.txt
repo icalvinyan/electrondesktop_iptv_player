@@ -1,0 +1,12 @@
+Run these in Terminal to rebuild the desktop app DMG with the new VOD tab:
+
+cd ~/Documents/Claude/Projects/iptv-player-v2/xtream-desktop
+npm run package:mac
+
+The new .dmg will be in xtream-desktop/dist/. Open it, drag "Xtream TV" into
+Applications (overwriting the old one) to test the VOD tab.
+
+Tip: you can also just run `npm start` from that folder to launch the app
+directly without building a new DMG — much faster for quick testing.
+
+You can delete this file afterward.
