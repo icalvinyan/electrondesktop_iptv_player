@@ -159,6 +159,54 @@
     background: transparent; border:none; padding:6px 14px; border-radius: 999px; color: var(--muted); font-weight:500;
   }
   .nav-tabs button.active { background: var(--bg-4); color: var(--text); }
+
+  /* ---- VOD (Netflix-style) ---- */
+  .vod-root { display:flex; flex-direction:column; height:100%; overflow:auto; }
+  .vod-hub { display:flex; gap:6px; padding:14px 20px 0; }
+  .vod-hub button {
+    background: transparent; border:none; padding:8px 16px; border-radius:999px;
+    color: var(--muted); font-weight:600; font-size:14px;
+  }
+  .vod-hub button.active { background: var(--bg-4); color: var(--text); }
+  .vod-spotlight {
+    position:relative; margin:16px 20px 0; height:340px; border-radius:14px; overflow:hidden;
+    display:flex; align-items:flex-end; background: var(--bg-2);
+  }
+  .vod-spotlight-bg {
+    position:absolute; inset:0; background-size:cover; background-position:center top;
+    filter:brightness(0.55);
+  }
+  .vod-spotlight-bg::after {
+    content:''; position:absolute; inset:0;
+    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.1) 60%);
+  }
+  .vod-spotlight-info { position:relative; padding:24px 28px; max-width:640px; display:flex; flex-direction:column; gap:8px; }
+  .vod-spotlight-title { font-size:28px; font-weight:800; text-shadow:0 2px 12px rgba(0,0,0,0.6); }
+  .vod-spotlight-meta { font-size:13px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; }
+  .vod-spotlight-overview {
+    font-size:13px; color:var(--text); opacity:0.85; line-height:1.5;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .vod-spotlight-actions { margin-top:6px; }
+  .vod-search-row { padding:16px 20px 0; }
+  .vod-search-row input { width:min(520px, 100%); }
+  .vod-rails { display:flex; flex-direction:column; gap:22px; padding:20px; }
+  .vod-rail-title { font-size:16px; font-weight:700; margin-bottom:10px; }
+  .vod-rail-track { display:flex; gap:12px; overflow-x:auto; padding-bottom:6px; scroll-behavior:smooth; }
+  .vod-card {
+    flex: 0 0 150px; cursor:pointer; transition: transform .15s ease;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .vod-card:hover, .vod-card:focus-visible { transform: scale(1.06); z-index:2; }
+  .vod-card-poster {
+    width:150px; height:225px; border-radius:8px; background-size:cover; background-position:center;
+    background-color: var(--bg-2); box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; text-align:center; padding:8px;
+  }
+  .vod-card-title { font-size:12px; color:var(--text); line-height:1.3; }
+  .vod-card-sub { font-size:11px; color:var(--muted); }
+  .vod-empty { color:var(--muted); padding:40px 20px; text-align:center; line-height:1.6; }
+  .vod-empty a { color:var(--accent); }
   .server-pill {
     display:flex; align-items:center; gap:8px; padding: 4px 8px 4px 10px;
     background: var(--bg-2); border:1px solid var(--line); border-radius: 999px;
@@ -1284,6 +1332,7 @@
       <button class="active" data-view="player">Live</button>
       <button data-view="multi">Multi</button>
       <button data-view="favorites">Favorites</button>
+      <button data-view="vod">VOD</button>
     </div>
     <div class="grow"></div>
     <div class="search">
@@ -1519,6 +1568,33 @@
         <div id="fav-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px;"></div>
       </div>
     </div>
+
+    <!-- VOD (Discover) view — Netflix-style movie/series browser -->
+    <div class="view" id="view-vod">
+      <div class="vod-root" id="vod-root">
+        <div class="vod-hub" id="vod-hub">
+          <button class="active" data-vod-section="home">Home</button>
+          <button data-vod-section="movies">Movies</button>
+          <button data-vod-section="shows">Shows</button>
+          <button data-vod-section="search">Search</button>
+        </div>
+        <div class="vod-spotlight" id="vod-spotlight" style="display:none;">
+          <div class="vod-spotlight-bg" id="vod-spotlight-bg"></div>
+          <div class="vod-spotlight-info">
+            <div class="vod-spotlight-title" id="vod-spotlight-title"></div>
+            <div class="vod-spotlight-meta" id="vod-spotlight-meta"></div>
+            <div class="vod-spotlight-overview" id="vod-spotlight-overview"></div>
+            <div class="vod-spotlight-actions">
+              <button class="primary" id="vod-spotlight-play">▶ Play</button>
+            </div>
+          </div>
+        </div>
+        <div class="vod-search-row" id="vod-search-row" style="display:none;">
+          <input id="vod-search-input" type="search" placeholder="Search movies &amp; shows…" />
+        </div>
+        <div class="vod-rails" id="vod-rails"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1621,6 +1697,54 @@
             <span><span class="kbd">S</span> favorite</span>
           </div>
         </div>
+        <details class="section" id="integrations-section">
+          <summary>VOD Integrations (Real-Debrid / Trakt)</summary>
+          <div style="margin-top:10px; display:flex; flex-direction:column; gap:14px;">
+            <div>
+              <label>Real-Debrid API token</label>
+              <div style="display:flex; gap:8px;">
+                <input type="password" id="s-rd-key" placeholder="Paste your Real-Debrid API token" style="flex:1;">
+                <button id="btn-rd-save">Save</button>
+              </div>
+              <div style="margin-top:6px; font-size:12px; color:var(--muted);">
+                <span id="s-rd-status">Not connected</span> ·
+                <a href="https://real-debrid.com/apitoken" target="_blank" rel="noopener" style="color:var(--accent);">Get your token</a>
+              </div>
+            </div>
+            <div>
+              <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
+              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
+                Requires a free Trakt API app — create one at
+                <a href="https://trakt.tv/oauth/applications/new" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/oauth/applications/new</a>
+                (redirect URI <code>urn:ietf:wg:oauth:2.0:oob</code>), then paste its Client ID/Secret below.
+              </div>
+              <div style="display:flex; gap:8px; margin-bottom:8px;">
+                <input type="text" id="s-trakt-client-id" placeholder="Client ID" style="flex:1;">
+                <input type="password" id="s-trakt-client-secret" placeholder="Client Secret" style="flex:1;">
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <span id="s-trakt-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                <button id="btn-trakt-connect">Connect Trakt</button>
+                <button id="btn-trakt-disconnect" class="danger" style="display:none;">Disconnect</button>
+              </div>
+              <div id="s-trakt-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
+            </div>
+            <div>
+              <label>Stream source (scraper)</label>
+              <select id="s-scraper-source">
+                <option value="torrentio">Torrentio (default)</option>
+                <option value="aiostreams">AIOStreams</option>
+              </select>
+            </div>
+            <div>
+              <label>When multiple stream results are found</label>
+              <select id="s-autopick">
+                <option value="off">Let me choose (default)</option>
+                <option value="on">Auto-pick best stream</option>
+              </select>
+            </div>
+          </div>
+        </details>
         <details class="section">
           <summary>Server profile</summary>
           <div id="server-edit-area" style="margin-top:10px;"></div>
@@ -1728,6 +1852,19 @@
       }, this._data.settings || {});
       this._data.lastChannel     = this._data.lastChannel     || {};
       this._data.serverFavorites = this._data.serverFavorites || [];
+      this._data.integrations    = Object.assign({
+        realDebrid:    { apiKey: '' },
+        trakt:         { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        scraperSource: 'torrentio',   // 'torrentio' | 'aiostreams'
+        autoPickStream: false,
+        vodWatched:    {},            // { [imdbId]: { progress, lastWatchedAt, ... } } — local watch history fallback
+      }, this._data.integrations || {});
+      // Defensive sub-merges in case of older partial saves
+      this._data.integrations.realDebrid = Object.assign({ apiKey: '' }, this._data.integrations.realDebrid || {});
+      this._data.integrations.trakt = Object.assign(
+        { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        this._data.integrations.trakt || {}
+      );
     },
     async load() {
       // Desktop: load from userData JSON file via IPC
@@ -1837,6 +1974,59 @@
       try { localStorage.removeItem(this.KEY); } catch(e){}
       this._data = null;
       this.load();
+    },
+
+    /* ---- VOD integrations (Real-Debrid / Trakt / scraper prefs) ---- */
+    integrations() { return this._data.integrations; },
+    setRealDebridKey(apiKey) {
+      this._data.integrations.realDebrid.apiKey = (apiKey || '').trim();
+      this.save();
+    },
+    getRealDebridKey() { return this._data.integrations.realDebrid.apiKey || ''; },
+    isRealDebridConnected() { return !!this.getRealDebridKey(); },
+
+    setTraktTokens(patch) {
+      Object.assign(this._data.integrations.trakt, patch);
+      this.save();
+    },
+    getTrakt() { return this._data.integrations.trakt; },
+    isTraktConnected() {
+      const t = this._data.integrations.trakt;
+      return !!(t && t.enabled && t.accessToken);
+    },
+    disconnectTrakt() {
+      this._data.integrations.trakt = {
+        enabled: false, clientId: this._data.integrations.trakt.clientId || '',
+        clientSecret: this._data.integrations.trakt.clientSecret || '',
+        accessToken: '', refreshToken: '', expiresAt: 0
+      };
+      this.save();
+    },
+
+    getScraperSource() { return this._data.integrations.scraperSource || 'torrentio'; },
+    setScraperSource(src) {
+      this._data.integrations.scraperSource = (src === 'aiostreams') ? 'aiostreams' : 'torrentio';
+      this.save();
+    },
+
+    getAutoPickStream() { return !!this._data.integrations.autoPickStream; },
+    setAutoPickStream(on) { this._data.integrations.autoPickStream = !!on; this.save(); },
+
+    rememberVodProgress(imdbId, patch) {
+      if (!imdbId) return;
+      const w = this._data.integrations.vodWatched;
+      w[imdbId] = Object.assign({ lastWatchedAt: Date.now() }, w[imdbId] || {}, patch, { lastWatchedAt: Date.now() });
+      this.save();
+    },
+    getVodProgress(imdbId) {
+      return (this._data.integrations.vodWatched || {})[imdbId] || null;
+    },
+    continueWatchingList(limit) {
+      const w = this._data.integrations.vodWatched || {};
+      return Object.keys(w)
+        .map(id => Object.assign({ imdbId: id }, w[id]))
+        .sort((a, b) => (b.lastWatchedAt||0) - (a.lastWatchedAt||0))
+        .slice(0, limit || 20);
     }
   };
 
@@ -3799,6 +3989,7 @@
       }
     }
     if (v === 'favorites') renderFavoritesGrid();
+    if (v === 'vod') renderVodHome();
     if (v === 'player') bumpOverlay();
     if (v === 'multi') {
       $('#multi-hint').textContent = 'Sidebar clicks add channels here. Click a tile to give it audio.';
@@ -4177,6 +4368,7 @@
     $('#s-overlay-opacity').value = opacityPct;
     $('#s-overlay-opacity-val').textContent = opacityPct + '%';
     renderServerEditor();
+    renderIntegrationsPanel();
     openModal('settings-modal');
   });
   $('#s-container').addEventListener('change', () => {
@@ -4228,6 +4420,530 @@
       closeModal('settings-modal');
       await connectToServer(Storage.activeServer());
     });
+  }
+
+  /* ---- VOD integrations panel (Real-Debrid / Trakt / scraper prefs) ---- */
+  let _traktPollTimer = null;
+  function stopTraktPoll() { if (_traktPollTimer) { clearInterval(_traktPollTimer); _traktPollTimer = null; } }
+
+  function renderIntegrationsPanel() {
+    const it = Storage.integrations();
+
+    // Real-Debrid
+    $('#s-rd-key').value = Storage.getRealDebridKey();
+    $('#s-rd-status').textContent = Storage.isRealDebridConnected() ? 'Connected' : 'Not connected';
+    $('#s-rd-status').style.color = Storage.isRealDebridConnected() ? 'var(--accent)' : 'var(--muted)';
+
+    // Trakt
+    $('#s-trakt-client-id').value = it.trakt.clientId || '';
+    $('#s-trakt-client-secret').value = it.trakt.clientSecret || '';
+    const traktConnected = Storage.isTraktConnected();
+    $('#s-trakt-status').textContent = traktConnected ? 'Connected' : 'Not connected';
+    $('#s-trakt-status').style.color = traktConnected ? 'var(--accent)' : 'var(--muted)';
+    $('#btn-trakt-connect').style.display = traktConnected ? 'none' : '';
+    $('#btn-trakt-disconnect').style.display = traktConnected ? '' : 'none';
+    if (traktConnected) {
+      stopTraktPoll();
+      $('#s-trakt-device-area').style.display = 'none';
+      $('#s-trakt-device-area').innerHTML = '';
+    }
+
+    // Scraper / autopick
+    $('#s-scraper-source').value = Storage.getScraperSource();
+    $('#s-autopick').value = Storage.getAutoPickStream() ? 'on' : 'off';
+  }
+
+  $('#btn-rd-save').addEventListener('click', () => {
+    Storage.setRealDebridKey($('#s-rd-key').value);
+    renderIntegrationsPanel();
+    toast(Storage.isRealDebridConnected() ? 'Real-Debrid token saved.' : 'Real-Debrid token cleared.');
+  });
+
+  $('#s-scraper-source').addEventListener('change', () => {
+    Storage.setScraperSource($('#s-scraper-source').value);
+  });
+  $('#s-autopick').addEventListener('change', () => {
+    Storage.setAutoPickStream($('#s-autopick').value === 'on');
+  });
+
+  $('#btn-trakt-disconnect').addEventListener('click', () => {
+    stopTraktPoll();
+    Storage.disconnectTrakt();
+    renderIntegrationsPanel();
+    toast('Trakt disconnected.');
+  });
+
+  $('#btn-trakt-connect').addEventListener('click', async () => {
+    const clientId = $('#s-trakt-client-id').value.trim();
+    const clientSecret = $('#s-trakt-client-secret').value.trim();
+    if (!clientId || !clientSecret) {
+      toast('Enter your Trakt Client ID and Secret first.');
+      return;
+    }
+    Storage.setTraktTokens({ clientId, clientSecret });
+
+    const area = $('#s-trakt-device-area');
+    area.style.display = '';
+    area.innerHTML = '<div style="color:var(--muted)">Requesting device code…</div>';
+    stopTraktPoll();
+
+    try {
+      const codeRes = await window.xtream.fetch('https://api.trakt.tv/oauth/device/code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId })
+      });
+      const codeData = JSON.parse(codeRes.body || codeRes.data || '{}');
+      if (!codeData.device_code) throw new Error('No device code returned.');
+
+      area.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div>Go to <a href="https://trakt.tv/activate" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/activate</a> and enter this code:</div>
+          <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
+          <div id="s-trakt-poll-status" style="color:var(--muted);">Waiting for authorization…</div>
+        </div>`;
+
+      const interval = Math.max(2, codeData.interval || 5) * 1000;
+      const expiresAt = Date.now() + (codeData.expires_in || 600) * 1000;
+
+      _traktPollTimer = setInterval(async () => {
+        if (Date.now() > expiresAt) {
+          stopTraktPoll();
+          const st = $('#s-trakt-poll-status'); if (st) st.textContent = 'Code expired — click Connect Trakt to try again.';
+          return;
+        }
+        try {
+          const tokRes = await window.xtream.fetch('https://api.trakt.tv/oauth/device/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: codeData.device_code,
+              client_id: clientId,
+              client_secret: clientSecret
+            })
+          });
+          const status = tokRes.status || tokRes.statusCode;
+          if (status === 200) {
+            const tok = JSON.parse(tokRes.body || tokRes.data || '{}');
+            stopTraktPoll();
+            Storage.setTraktTokens({
+              enabled: true,
+              accessToken: tok.access_token || '',
+              refreshToken: tok.refresh_token || '',
+              expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+            });
+            renderIntegrationsPanel();
+            toast('Trakt connected!');
+          } else if (status === 400) {
+            // authorization_pending — keep polling
+          } else if (status === 404 || status === 410 || status === 409 || status === 418) {
+            stopTraktPoll();
+            const st = $('#s-trakt-poll-status'); if (st) st.textContent = 'Authorization failed or was denied — click Connect Trakt to try again.';
+          }
+        } catch (e) { /* ignore transient poll errors */ }
+      }, interval);
+    } catch (e) {
+      area.innerHTML = `<div style="color:var(--danger, #e55);">Couldn't start Trakt authorization: ${escapeHtml(e.message || String(e))}</div>`;
+    }
+  });
+
+  /* ============================================================
+   *  VOD (Discover) — Netflix-style browse
+   * ============================================================ */
+  const TraktAPI = {
+    BASE: 'https://api.trakt.tv',
+    async _get(path) {
+      const it = Storage.integrations();
+      const headers = {
+        'Content-Type': 'application/json',
+        'trakt-api-version': '2',
+        'trakt-api-key': it.trakt.clientId || '',
+      };
+      if (it.trakt.accessToken) headers['Authorization'] = 'Bearer ' + it.trakt.accessToken;
+      const r = await window.xtream.fetch(this.BASE + path, { headers });
+      if (!r.ok && r.status !== 200) throw new Error('Trakt error ' + r.status);
+      return JSON.parse(r.body || '[]');
+    },
+    trendingMovies()  { return this._get('/movies/trending?limit=20'); },
+    popularMovies()   { return this._get('/movies/popular?limit=20'); },
+    trendingShows()   { return this._get('/shows/trending?limit=20'); },
+    popularShows()    { return this._get('/shows/popular?limit=20'); },
+    searchTitles(q)   { return this._get('/search/movie,show?query=' + encodeURIComponent(q) + '&limit=24'); },
+  };
+
+  const TMDB_IMG = 'https://image.tmdb.org/t/p/w342';
+  function vodPosterStyle(item) {
+    // Trakt items don't include images directly without extended=images (paid);
+    // fall back to a text card. If a poster URL is ever available, use it.
+    if (item && item._poster) return `background-image:url('${item._poster}')`;
+    return '';
+  }
+  function vodTitleOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.title) || '';
+  }
+  function vodYearOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.year) || '';
+  }
+  function vodOverviewOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && (m.overview || m.tagline)) || '';
+  }
+  function vodImdbOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.ids && m.ids.imdb) || '';
+  }
+
+  function vodCard(entry, kind) {
+    const title = vodTitleOf(entry);
+    const year = vodYearOf(entry);
+    const card = document.createElement('div');
+    card.className = 'vod-card';
+    card.tabIndex = 0;
+    card.innerHTML = `
+      <div class="vod-card-poster" style="${vodPosterStyle(entry)}">${vodPosterStyle(entry) ? '' : escapeHtml(title)}</div>
+      <div class="vod-card-title">${escapeHtml(title)}</div>
+      <div class="vod-card-sub">${escapeHtml(String(year || ''))}${kind ? ' · ' + kind : ''}</div>`;
+    card.addEventListener('click', () => showVodSpotlight(entry, kind));
+    return card;
+  }
+
+  function showVodSpotlight(entry, kind) {
+    State.vodFocused = { entry, kind };
+    const title = vodTitleOf(entry);
+    const year = vodYearOf(entry);
+    const overview = vodOverviewOf(entry);
+    $('#vod-spotlight').style.display = '';
+    $('#vod-spotlight-title').textContent = title;
+    $('#vod-spotlight-meta').textContent = [year, kind === 'show' ? 'Series' : 'Movie'].filter(Boolean).join(' · ');
+    $('#vod-spotlight-overview').textContent = overview || 'No synopsis available.';
+    const bg = $('#vod-spotlight-bg');
+    bg.style.backgroundImage = entry._backdrop ? `url('${entry._backdrop}')` : '';
+  }
+
+  $('#vod-spotlight-play').addEventListener('click', () => {
+    const f = State.vodFocused;
+    if (!f) return;
+    const imdb = vodImdbOf(f.entry);
+    if (!Storage.isRealDebridConnected()) {
+      toast('Connect Real-Debrid in Settings → VOD Integrations to play titles.');
+      return;
+    }
+    if (!imdb) {
+      toast("Couldn't resolve an IMDb ID for this title — try connecting Trakt for richer metadata.");
+      return;
+    }
+    if (f.kind === 'show') {
+      toast('Series playback is coming soon — movies are supported first.');
+      return;
+    }
+    resolveAndPlayMovie(imdb, vodTitleOf(f.entry));
+  });
+
+  /* ---- Stream sourcing: Torrentio / AIOStreams ---- */
+  const StreamScrapers = {
+    async queryMovie(imdbId) {
+      const source = Storage.getScraperSource();
+      const url = (source === 'aiostreams')
+        ? `https://aiostreams.elfhosted.com/stream/movie/${imdbId}.json`
+        : `https://torrentio.strem.fun/stream/movie/${imdbId}.json`;
+      try {
+        const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
+        const data = JSON.parse(r.body || '{}');
+        return Array.isArray(data.streams) ? data.streams : [];
+      } catch (e) {
+        if (source === 'aiostreams') {
+          // AIOStreams instances vary by user manifest — fall back to Torrentio.
+          toast('AIOStreams lookup failed — falling back to Torrentio.');
+          const r2 = await window.xtream.fetch(`https://torrentio.strem.fun/stream/movie/${imdbId}.json`, { headers: { 'Accept': 'application/json' } });
+          const data2 = JSON.parse(r2.body || '{}');
+          return Array.isArray(data2.streams) ? data2.streams : [];
+        }
+        throw e;
+      }
+    }
+  };
+
+  function parseStreamResult(s) {
+    // Torrentio/AIOStreams "stream" objects expose a magnet-ish infoHash + title blob.
+    const title = s.title || s.name || '';
+    const sizeMatch = title.match(/💾\s*([\d.]+\s*[KMGT]?B)/i) || title.match(/([\d.]+\s*[KMGT]B)/i);
+    const seedMatch = title.match(/👤\s*(\d+)/);
+    const qualityMatch = title.match(/\b(4K|2160p|1080p|720p|480p)\b/i);
+    return {
+      raw: s,
+      infoHash: s.infoHash || '',
+      fileIdx: (typeof s.fileIdx === 'number') ? s.fileIdx : null,
+      title: title.split('\n')[0] || (s.name || 'Unknown'),
+      size: sizeMatch ? sizeMatch[1] : '',
+      seeders: seedMatch ? parseInt(seedMatch[1], 10) : 0,
+      quality: qualityMatch ? qualityMatch[1].toUpperCase() : '',
+    };
+  }
+
+  function pickBestStream(parsed) {
+    const rank = q => ({'4K':4,'2160P':4,'1080P':3,'720P':2,'480P':1}[String(q).toUpperCase()] || 0);
+    return parsed.slice().sort((a, b) => (rank(b.quality) - rank(a.quality)) || (b.seeders - a.seeders))[0];
+  }
+
+  function showStreamPickerModal(parsedList) {
+    return new Promise((resolve) => {
+      const bg = document.createElement('div');
+      bg.className = 'modal-bg show';
+      bg.innerHTML = `
+        <div class="modal">
+          <header><h2>Choose a stream</h2><button class="ghost" id="vod-picker-close">✕</button></header>
+          <section>
+            <div style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto;">
+              ${parsedList.map((p, i) => `
+                <button class="vod-pick-row" data-idx="${i}" style="text-align:left; display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:8px; background:var(--bg-2); border:1px solid var(--line);">
+                  <span style="font-weight:600; font-size:13px;">${escapeHtml(p.title)}</span>
+                  <span style="font-size:11px; color:var(--muted);">${[p.quality, p.size, p.seeders ? p.seeders + ' seeders' : ''].filter(Boolean).join(' · ')}</span>
+                </button>`).join('')}
+            </div>
+          </section>
+        </div>`;
+      document.body.appendChild(bg);
+      const cleanup = (val) => { bg.remove(); resolve(val); };
+      bg.querySelector('#vod-picker-close').addEventListener('click', () => cleanup(null));
+      bg.addEventListener('mousedown', (e) => { if (e.target === bg) cleanup(null); });
+      bg.querySelectorAll('.vod-pick-row').forEach(btn => {
+        btn.addEventListener('click', () => cleanup(parsedList[+btn.dataset.idx]));
+      });
+    });
+  }
+
+  /* ---- Real-Debrid client ---- */
+  const RealDebridAPI = {
+    BASE: 'https://api.real-debrid.com/rest/1.0',
+    async _call(path, opts = {}) {
+      const key = Storage.getRealDebridKey();
+      if (!key) throw new Error('No Real-Debrid token configured.');
+      const headers = Object.assign({ 'Authorization': 'Bearer ' + key }, opts.headers || {});
+      const r = await window.xtream.fetch(this.BASE + path, Object.assign({}, opts, { headers }));
+      const status = r.status || r.statusCode;
+      if (status >= 400) throw new Error('Real-Debrid error ' + status + (r.body ? (': ' + r.body.slice(0, 160)) : ''));
+      return r.body ? JSON.parse(r.body) : null;
+    },
+    addMagnet(magnet) {
+      return this._call('/torrents/addMagnet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'magnet=' + encodeURIComponent(magnet)
+      });
+    },
+    torrentInfo(id) { return this._call('/torrents/info/' + id); },
+    selectFiles(id, fileIds) {
+      return this._call('/torrents/selectFiles/' + id, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'files=' + encodeURIComponent(fileIds)
+      });
+    },
+    unrestrictLink(link) {
+      return this._call('/unrestrict/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'link=' + encodeURIComponent(link)
+      });
+    }
+  };
+
+  function magnetFromInfoHash(hash, title) {
+    return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(title || '')}`;
+  }
+
+  async function debridResolve(parsedStream, onStatus) {
+    if (!parsedStream.infoHash) throw new Error('This result has no torrent hash to send to Real-Debrid.');
+    const magnet = magnetFromInfoHash(parsedStream.infoHash, parsedStream.title);
+
+    onStatus('Adding to Real-Debrid…');
+    const added = await RealDebridAPI.addMagnet(magnet);
+    const torrentId = added && added.id;
+    if (!torrentId) throw new Error('Real-Debrid did not return a torrent ID.');
+
+    onStatus('Selecting the largest file…');
+    let info = await RealDebridAPI.torrentInfo(torrentId);
+    const files = (info && info.files) || [];
+    let chosen = files.slice().sort((a, b) => (b.bytes || 0) - (a.bytes || 0))[0];
+    const fileIds = chosen ? String(chosen.id) : 'all';
+    await RealDebridAPI.selectFiles(torrentId, fileIds);
+
+    onStatus('Waiting for Real-Debrid to cache the torrent…');
+    const deadline = Date.now() + 5 * 60 * 1000;
+    let link = null;
+    while (Date.now() < deadline) {
+      info = await RealDebridAPI.torrentInfo(torrentId);
+      if (info.status === 'downloaded' && info.links && info.links.length) {
+        link = info.links[0];
+        break;
+      }
+      if (info.status === 'error' || info.status === 'magnet_error' || info.status === 'dead') {
+        throw new Error('Real-Debrid could not process this torrent (status: ' + info.status + ').');
+      }
+      onStatus(`Real-Debrid status: ${info.status}${info.progress != null ? ' (' + info.progress + '%)' : ''}…`);
+      await new Promise(res => setTimeout(res, 4000));
+    }
+    if (!link) throw new Error('Timed out waiting for Real-Debrid to cache this torrent.');
+
+    onStatus('Unlocking direct link…');
+    const unrestricted = await RealDebridAPI.unrestrictLink(link);
+    if (!unrestricted || !unrestricted.download) throw new Error('Real-Debrid did not return a playable link.');
+    return unrestricted.download;
+  }
+
+  function playVodUrl(url, title) {
+    setView('player');
+    State.currentChannel = null;
+    try { $('#player-empty').classList.add('hidden'); } catch (e) {}
+    const numEl = $('#ov-num'); if (numEl) numEl.textContent = 'VOD';
+    const nameEl = $('#ov-name'); if (nameEl) nameEl.textContent = title || '';
+    const nowEl = $('#ov-now'); if (nowEl) nowEl.textContent = '';
+    const nextEl = $('#ov-next'); if (nextEl) nextEl.textContent = '';
+    const logoEl = $('#ov-logo'); if (logoEl) { logoEl.removeAttribute('src'); logoEl.style.display = 'none'; }
+    State.player.load(url);
+    showOverlayTemporarily();
+  }
+
+  async function resolveAndPlayMovie(imdbId, title) {
+    toast('Looking for streams for "' + title + '"…', 8000);
+    try {
+      const raw = await StreamScrapers.queryMovie(imdbId);
+      if (!raw.length) { toast('No streams found for "' + title + '".'); return; }
+      const parsed = raw.map(parseStreamResult).filter(p => p.infoHash);
+      if (!parsed.length) { toast('Found results, but none were usable torrents.'); return; }
+
+      let chosen;
+      if (Storage.getAutoPickStream()) {
+        chosen = pickBestStream(parsed);
+      } else {
+        chosen = await showStreamPickerModal(parsed);
+        if (!chosen) return;
+      }
+
+      toast('Resolving via Real-Debrid…', 8000);
+      const url = await debridResolve(chosen, (msg) => toast(msg, 8000));
+      playVodUrl(url, title);
+      toast('Now playing: ' + title);
+    } catch (e) {
+      toast('Playback failed: ' + (e.message || String(e)));
+    }
+  }
+
+  function vodRail(title, items, kind) {
+    const wrap = document.createElement('div');
+    const heading = document.createElement('div');
+    heading.className = 'vod-rail-title';
+    heading.textContent = title;
+    const track = document.createElement('div');
+    track.className = 'vod-rail-track';
+    items.forEach(entry => track.appendChild(vodCard(entry, kind)));
+    wrap.appendChild(heading);
+    wrap.appendChild(track);
+    return wrap;
+  }
+
+  function vodEmptyState() {
+    const div = document.createElement('div');
+    div.className = 'vod-empty';
+    div.innerHTML = `
+      <div style="font-size:15px; font-weight:600; margin-bottom:6px; color:var(--text);">Connect an account to start browsing</div>
+      <div>Connect <strong>Trakt</strong> in <a href="#" id="vod-empty-settings-link">Settings → VOD Integrations</a> to load
+      trending and popular movies &amp; shows here, Netflix-style. You can also search for a specific title once Trakt
+      is connected. Real-Debrid is required to actually play a title once you find it.</div>`;
+    return div;
+  }
+
+  let _vodSection = 'home';
+  async function renderVodSection(section) {
+    _vodSection = section;
+    $$('#vod-hub button').forEach(b => b.classList.toggle('active', b.dataset.vodSection === section));
+    $('#vod-search-row').style.display = (section === 'search') ? '' : 'none';
+    const rails = $('#vod-rails');
+    rails.innerHTML = '<div class="vod-empty">Loading…</div>';
+    $('#vod-spotlight').style.display = 'none';
+
+    const it = Storage.integrations();
+    if (!it.trakt.enabled || !it.trakt.accessToken) {
+      rails.innerHTML = '';
+      rails.appendChild(vodEmptyState());
+      const link = $('#vod-empty-settings-link');
+      if (link) link.addEventListener('click', (e) => {
+        e.preventDefault();
+        $('#btn-settings').click();
+        setTimeout(() => { const sec = $('#integrations-section'); if (sec) sec.open = true; }, 50);
+      });
+      return;
+    }
+
+    try {
+      rails.innerHTML = '';
+      if (section === 'home') {
+        const [trendM, popM, trendS] = await Promise.all([
+          TraktAPI.trendingMovies().catch(() => []),
+          TraktAPI.popularMovies().catch(() => []),
+          TraktAPI.trendingShows().catch(() => []),
+        ]);
+        if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
+        if (trendM.length) rails.appendChild(vodRail('Trending Movies', trendM, 'movie'));
+        if (trendS.length) rails.appendChild(vodRail('Trending Shows', trendS, 'show'));
+        if (popM.length) rails.appendChild(vodRail('Popular Movies', popM, 'movie'));
+        if (!trendM.length && !trendS.length && !popM.length) rails.appendChild(vodEmptyState());
+      } else if (section === 'movies') {
+        const [trendM, popM] = await Promise.all([
+          TraktAPI.trendingMovies().catch(() => []),
+          TraktAPI.popularMovies().catch(() => []),
+        ]);
+        if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
+        if (trendM.length) rails.appendChild(vodRail('Trending Movies', trendM, 'movie'));
+        if (popM.length) rails.appendChild(vodRail('Popular Movies', popM, 'movie'));
+        if (!trendM.length && !popM.length) rails.appendChild(vodEmptyState());
+      } else if (section === 'shows') {
+        const [trendS, popS] = await Promise.all([
+          TraktAPI.trendingShows().catch(() => []),
+          TraktAPI.popularShows().catch(() => []),
+        ]);
+        if (trendS[0]) showVodSpotlight(trendS[0], 'show');
+        if (trendS.length) rails.appendChild(vodRail('Trending Shows', trendS, 'show'));
+        if (popS.length) rails.appendChild(vodRail('Popular Shows', popS, 'show'));
+        if (!trendS.length && !popS.length) rails.appendChild(vodEmptyState());
+      } else if (section === 'search') {
+        rails.innerHTML = '<div class="vod-empty">Type a title above and press Enter to search.</div>';
+      }
+    } catch (e) {
+      rails.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'vod-empty';
+      div.textContent = "Couldn't load titles from Trakt: " + (e.message || e);
+      rails.appendChild(div);
+    }
+  }
+
+  function renderVodHome() {
+    if (!$('#vod-hub')._wired) {
+      $('#vod-hub')._wired = true;
+      $$('#vod-hub button').forEach(b => b.addEventListener('click', () => renderVodSection(b.dataset.vodSection)));
+      const doSearch = debounce(async () => {
+        const q = $('#vod-search-input').value.trim();
+        const rails = $('#vod-rails');
+        if (!q) { rails.innerHTML = '<div class="vod-empty">Type a title above and press Enter to search.</div>'; return; }
+        rails.innerHTML = '<div class="vod-empty">Searching…</div>';
+        try {
+          const results = await TraktAPI.searchTitles(q);
+          rails.innerHTML = '';
+          const movies = results.filter(r => r.movie).map(r => r.movie ? { movie: r.movie } : r);
+          const shows  = results.filter(r => r.show).map(r => r.show ? { show: r.show } : r);
+          if (movies.length) rails.appendChild(vodRail('Movies', movies, 'movie'));
+          if (shows.length) rails.appendChild(vodRail('Shows', shows, 'show'));
+          if (!movies.length && !shows.length) rails.innerHTML = '<div class="vod-empty">No results found.</div>';
+        } catch (e) {
+          rails.innerHTML = '<div class="vod-empty">Search failed: ' + escapeHtml(e.message || String(e)) + '</div>';
+        }
+      }, 500);
+      $('#vod-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+    }
+    renderVodSection(_vodSection);
   }
 
   $('#btn-disconnect').addEventListener('click', () => {
