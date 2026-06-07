@@ -1712,13 +1712,7 @@
             <div>
               <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
               <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
-                Requires a free Trakt API app — create one at
-                <a href="https://trakt.tv/oauth/applications/new" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/oauth/applications/new</a>
-                (redirect URI <code>urn:ietf:wg:oauth:2.0:oob</code>), then paste its Client ID/Secret below.
-              </div>
-              <div style="display:flex; gap:8px; margin-bottom:8px;">
-                <input type="text" id="s-trakt-client-id" placeholder="Client ID" style="flex:1;">
-                <input type="password" id="s-trakt-client-secret" placeholder="Client Secret" style="flex:1;">
+                Connect your Trakt account by scanning a QR code or entering a short code at trakt.tv/activate — no password needed.
               </div>
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <span id="s-trakt-status" style="font-size:12px; color:var(--muted);">Not connected</span>
@@ -1852,7 +1846,7 @@
       this._data.serverFavorites = this._data.serverFavorites || [];
       this._data.integrations    = Object.assign({
         realDebrid:    { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
-        trakt:         { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        trakt:         { enabled: false, accessToken: '', refreshToken: '', expiresAt: 0 },
         scraperSource: 'torrentio',   // 'torrentio' | 'aiostreams'
         autoPickStream: false,
         vodWatched:    {},            // { [imdbId]: { progress, lastWatchedAt, ... } } — local watch history fallback
@@ -2010,9 +2004,7 @@
     },
     disconnectTrakt() {
       this._data.integrations.trakt = {
-        enabled: false, clientId: this._data.integrations.trakt.clientId || '',
-        clientSecret: this._data.integrations.trakt.clientSecret || '',
-        accessToken: '', refreshToken: '', expiresAt: 0
+        enabled: false, accessToken: '', refreshToken: '', expiresAt: 0
       };
       this.save();
     },
@@ -4442,6 +4434,11 @@
   function stopTraktPoll() { if (_traktPollTimer) { clearInterval(_traktPollTimer); _traktPollTimer = null; } }
   function stopRdPoll() { if (_rdPollTimer) { clearInterval(_rdPollTimer); _rdPollTimer = null; } }
 
+  // App-level Trakt API credentials (registered once by the app's developer —
+  // end users never see or enter these; they just scan a QR / enter a PIN).
+  const TRAKT_CLIENT_ID = 'f621a1b4fe3eba2f95eb0145e38a061631f06c933a93de2e03fb0f6be2c0c138';
+  const TRAKT_CLIENT_SECRET = '8e5b2c08cbb2148bd2e9928fa87ac6e783f6525724d030bc6cfea4f04a956a77';
+
   // Renders a scannable QR code for a URL via a public QR image service — no
   // local QR library needed; just an <img> pointing at the encoded data.
   function qrImg(data, size) {
@@ -4466,8 +4463,6 @@
     }
 
     // Trakt
-    $('#s-trakt-client-id').value = it.trakt.clientId || '';
-    $('#s-trakt-client-secret').value = it.trakt.clientSecret || '';
     const traktConnected = Storage.isTraktConnected();
     $('#s-trakt-status').textContent = traktConnected ? 'Connected' : 'Not connected';
     $('#s-trakt-status').style.color = traktConnected ? 'var(--accent)' : 'var(--muted)';
@@ -4596,13 +4591,8 @@
   });
 
   $('#btn-trakt-connect').addEventListener('click', async () => {
-    const clientId = $('#s-trakt-client-id').value.trim();
-    const clientSecret = $('#s-trakt-client-secret').value.trim();
-    if (!clientId || !clientSecret) {
-      toast('Enter your Trakt Client ID and Secret first.');
-      return;
-    }
-    Storage.setTraktTokens({ clientId, clientSecret });
+    const clientId = TRAKT_CLIENT_ID;
+    const clientSecret = TRAKT_CLIENT_SECRET;
 
     const area = $('#s-trakt-device-area');
     area.style.display = '';
@@ -4682,7 +4672,7 @@
       const headers = {
         'Content-Type': 'application/json',
         'trakt-api-version': '2',
-        'trakt-api-key': it.trakt.clientId || '',
+        'trakt-api-key': TRAKT_CLIENT_ID,
       };
       if (it.trakt.accessToken) headers['Authorization'] = 'Bearer ' + it.trakt.accessToken;
       const r = await window.xtream.fetch(this.BASE + path, { headers });

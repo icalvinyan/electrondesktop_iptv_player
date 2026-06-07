@@ -3,10 +3,16 @@ Run these in Terminal (in the iptv-player-v2 folder):
 cd ~/Documents/Claude/Projects/iptv-player-v2
 rm -f .git/index.lock .git/HEAD.lock
 git add -A
-git commit -m "Replace Real-Debrid API token paste with QR/device-code login; add QR codes to Trakt connect flow"
+git commit -m "Bake Trakt API credentials into the app; remove Client ID/Secret fields from UI"
 git push
 
-(No need for "-u origin feature/vod-tab" this time — the branch is already
+Then quit the running Xtream TV app completely and relaunch it
+(npm start, or rebuild the DMG per REBUILD_DMG.txt) to pick up the change.
+
+You should now see "Connect Trakt" go straight to a QR code + short code,
+with no Client ID/Secret fields anywhere.
+
+(No need for "-u origin feature/vod-tab" — the branch is already
 tracking origin from the last push.)
 
 You can delete this file afterward.
