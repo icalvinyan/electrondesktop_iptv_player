@@ -629,11 +629,13 @@
   .player-overlay .status-badge.live .dot { background: var(--danger); }
   /* VOD mode: hide live-TV-only chrome, show clearlogo + seek bar instead */
   .player-overlay.vod-mode #ov-status,
+  .player-overlay.vod-mode #ov-num,
   .player-overlay.vod-mode #signal-bars,
   .player-overlay.vod-mode #btn-live,
   .player-overlay.vod-mode #btn-guide,
   .player-overlay.vod-mode #btn-fav,
   .player-overlay.vod-mode #btn-copy-url,
+  .player-overlay.vod-mode #btn-full,
   .player-overlay.vod-mode .ch-logo-wrap,
   .player-overlay.vod-mode .ch-name,
   .player-overlay.vod-mode .ch-now,
@@ -645,6 +647,43 @@
   }
   .player-overlay.vod-mode .ov-clearlogo[src] { display: block; }
   .player-overlay.vod-mode #vod-seek-row { display: flex !important; }
+  .player-overlay.vod-mode #btn-vod-back,
+  .player-overlay.vod-mode #btn-audio-track,
+  .player-overlay.vod-mode #btn-subtitles { display: inline-flex !important; }
+  .player-overlay .ctl-btn.has-tracks { display: inline-flex !important; }
+  .player-overlay .ctl-btn.is-active { background: rgba(91,140,255,0.22); border-color: var(--accent-2); color: var(--accent-2); }
+  /* Floating time readout that follows the seek thumb while scrubbing */
+  .vod-scrub-time {
+    position: absolute; bottom: 100%; transform: translateX(-50%);
+    margin-bottom: 8px; padding: 3px 8px; border-radius: 6px;
+    background: rgba(0,0,0,.85); color:#fff; font-size:12px; font-weight:600;
+    font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+    display: none; z-index: 6;
+  }
+  .vod-scrub-time.show { display: block; }
+  .vod-scrub-preview {
+    position: absolute; bottom: 100%; transform: translateX(-50%);
+    margin-bottom: 34px; border-radius: 8px; overflow: hidden;
+    border: 2px solid rgba(255,255,255,.6); box-shadow: 0 6px 24px rgba(0,0,0,.6);
+    background: #000; display: none; pointer-events: none; z-index: 6;
+  }
+  .vod-scrub-preview.show { display: block; }
+  .vod-scrub-preview canvas { display:block; width:160px; height:90px; }
+  .vod-seek-row { position: relative; }
+  /* Track-picker popover for subtitles / audio track buttons */
+  .track-menu {
+    position: absolute; bottom: 56px; min-width: 180px; max-width: 280px;
+    background: rgba(20,24,34,.97); border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px; padding: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    z-index: 20; display: flex; flex-direction: column; gap: 2px;
+    max-height: 260px; overflow-y: auto;
+  }
+  .track-menu .track-item {
+    text-align:left; padding: 8px 10px; border-radius: 7px; border: none;
+    background: transparent; color: #dbe4f5; font-size: 13px; cursor: pointer;
+  }
+  .track-menu .track-item:hover { background: rgba(255,255,255,.08); }
+  .track-menu .track-item.active { background: rgba(91,140,255,.22); color: var(--accent-2); font-weight:600; }
   .vod-seek-row { display:flex; align-items:center; gap:10px; margin: 0 0 10px; }
   .vod-seek-row .vod-time { font-variant-numeric: tabular-nums; color:#cfe0ff; font-size:12px; min-width:46px; text-align:center; }
   .vod-seek-row .vod-time.end { text-align:left; }
@@ -1572,6 +1611,11 @@
       <div class="player-area">
         <div class="player-wrap" id="player-wrap">
           <video id="video" playsinline></video>
+          <!-- Embedded libmpv surface: native/mpv-addon decodes+renders VOD
+               frames in-process (RGBA, software path) and streams them here
+               over IPC; we blit each one with putImageData. Hidden unless an
+               embedded-mpv session is active (see tryPlayVodWithMpv2). -->
+          <canvas id="mpv2-canvas" class="hidden" style="position:absolute; inset:0; width:100%; height:100%; background:#000;"></canvas>
           <div class="player-overlay" id="player-overlay">
             <div class="top">
               <div style="flex:1"></div>
@@ -1596,10 +1640,15 @@
               <div class="vod-seek-row" id="vod-seek-row" style="display:none">
                 <span class="vod-time" id="vod-time-cur">0:00</span>
                 <input type="range" class="vod-seek" id="vod-seek" min="0" max="1000" value="0" step="1">
+                <div class="vod-scrub-preview" id="vod-scrub-preview"><canvas id="vod-scrub-canvas" width="160" height="90"></canvas></div>
+                <div class="vod-scrub-time" id="vod-scrub-time">0:00</div>
                 <span class="vod-time end" id="vod-time-dur">0:00</span>
               </div>
               <div class="controls-bar">
                 <div class="controls-left">
+                  <button id="btn-vod-back" class="ctl-btn" title="Back to library (Esc)" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 19l-7-7 7-7"/></svg>
+                  </button>
                   <span class="runtime-pill" id="ov-runtime">—:—</span>
                 </div>
                 <div class="controls-center">
@@ -1635,6 +1684,12 @@
                   <button id="btn-live" class="live-btn" title="Jump to live edge">● LIVE</button>
                   <button id="btn-guide" class="ctl-btn" title="Open the program guide (G or Cmd+G)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 4v16"/></svg>
+                  </button>
+                  <button id="btn-audio-track" class="ctl-btn" title="Audio track" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13" fill="none"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  </button>
+                  <button id="btn-subtitles" class="ctl-btn" title="Subtitles" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 13h3M7 10h6M14 13h3" stroke-linecap="round"/></svg>
                   </button>
 
                   <button id="btn-cast" class="ctl-btn" title="Cast">
@@ -2712,6 +2767,7 @@
       this.currentSrc = url;
       this._triedHlsFallback = false;
       this._triedLocalTranscode = false;
+      this._triedAudioTranscode = false;
       this._setLoading(true);
       // Clean up
       if (this.hls) {
@@ -2782,27 +2838,124 @@
           this._fail(this._classify(info));
         });
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
+      } else if (State.mode === 'vod' && this._looksLikeMkv(url) && window.xtream && window.xtream.localTranscode && !this._triedLocalTranscode) {
+        // VOD sources are debrid-resolved cached-torrent files, and a huge
+        // share of those are .mkv rips — a container browsers can't demux at
+        // all, almost always carrying audio (DTS/TrueHD/AC-3/E-AC-3) and
+        // subtitle (ASS/SSA/PGS) formats Chromium can't decode or render
+        // either. Native <video> on these doesn't just fail cleanly — it
+        // frequently "succeeds" with picture and no sound (MKV's audio track
+        // gets silently ignored), which is what the no-audio detector below
+        // exists to catch after the fact. For known .mkv sources, skip that
+        // multi-second native attempt entirely and go straight to the
+        // ffmpeg→H.264/AAC HLS remux pipeline — it's slower to start but it's
+        // the only path that reliably gets picture AND sound for these files.
+        this._triedLocalTranscode = true;
+        this._triedAudioTranscode = true; // pre-empt the native-audio fallback too
+        console.log('[video] .mkv source detected in VOD mode — routing straight to local ffmpeg remux:', url);
+        this._setLoading(true);
+        window.xtream.localTranscode(url).then(transcodeUrl => {
+          if (!transcodeUrl) {
+            // No ffmpeg available — fall back to a native attempt; better than nothing.
+            console.warn('[video] ffmpeg unavailable — falling back to native <video> for .mkv (audio/subs may not work)');
+            this._triedLocalTranscode = false;
+            this._triedAudioTranscode = false;
+            this.video.src = url;
+            this.video.addEventListener('loadedmetadata', () => this.play(), { once:true });
+            this.video.addEventListener('playing', () => this._checkNativeAudio(url), { once:true });
+            return;
+          }
+          console.log('[video] .mkv remux started:', transcodeUrl);
+          this._loadTranscoded(transcodeUrl);
+        }).catch(e => this._fail('MKV remux error: ' + (e && e.message || e)));
       } else {
-        // Native (Safari) or TS — try native; TS is not directly playable in most browsers.
+        // Native playback — direct VOD files (mp4 etc. from providers like
+        // AIOStreams/Real-Debrid) and TS/Safari-HLS land here.
         this.video.src = url;
         this.video.addEventListener('loadedmetadata', () => this.play(), { once:true });
+        this.video.addEventListener('playing', () => this._checkNativeAudio(url), { once:true });
       }
+    }
+    // Heuristic .mkv detection from a debrid playback URL — these URLs rarely
+    // end in a clean `.mkv` extension (they're tokenized proxy paths), but
+    // nearly all of them carry the original filename in a `name`/`filename`
+    // query parameter (or occasionally a path segment) that does.
+    _looksLikeMkv(url) {
+      try {
+        const u = new URL(url);
+        const nameParam = u.searchParams.get('name') || u.searchParams.get('filename') || u.searchParams.get('title') || '';
+        if (/\.mkv(\W|$)/i.test(nameParam)) return true;
+        if (/\.mkv(\?|#|$)/i.test(u.pathname)) return true;
+      } catch (e) {
+        if (/\.mkv(\W|$)/i.test(url || '')) return true;
+      }
+      return false;
+    }
+    // Many torrent rips use audio codecs Chromium can't decode (DTS, TrueHD,
+    // AC-3/E-AC-3, etc.) — the video plays fine but completely silently, with
+    // no error event fired. Detect that (decoded video bytes growing, decoded
+    // audio bytes stuck at zero) and fall back to the same local-ffmpeg
+    // transcode pipeline used for HEVC video, which remuxes/encodes the audio
+    // to AAC so the browser can play it.
+    _checkNativeAudio(url) {
+      if (this._triedAudioTranscode) return;
+      const v = this.video;
+      if (typeof v.webkitAudioDecodedByteCount !== 'number') return; // not Chromium — can't detect this way
+      setTimeout(() => {
+        if (this.currentSrc !== url) return; // user navigated away / loaded something else
+        const audioBytes = v.webkitAudioDecodedByteCount || 0;
+        const videoBytes = v.webkitVideoDecodedByteCount || 0;
+        if (audioBytes > 0 || videoBytes === 0) return; // audio is fine, or nothing decoded yet
+        if (this._triedAudioTranscode || !(window.xtream && window.xtream.localTranscode)) return;
+        this._triedAudioTranscode = true;
+        console.warn('[video] no audio decoded — likely an unsupported audio codec (DTS/TrueHD/AC-3). Remuxing via local ffmpeg…');
+        this._setLoading(true);
+        const resumeAt = v.currentTime || 0;
+        window.xtream.localTranscode(url).then(transcodeUrl => {
+          if (!transcodeUrl) { this._fail('Audio could not be played (unsupported codec) and ffmpeg was unavailable to remux it.'); return; }
+          console.log('[video] audio remux started:', transcodeUrl);
+          this._loadTranscoded(transcodeUrl);
+          if (resumeAt > 1) {
+            this.video.addEventListener('canplay', () => { try { this.video.currentTime = resumeAt; } catch(e){} }, { once:true });
+          }
+        }).catch(e => this._fail('Audio remux error: ' + (e && e.message || e)));
+      }, 4000);
     }
     _loadTranscoded(transcodeUrl) {
       if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
       this._setLoading(true);
-      // Wait up to 4s for ffmpeg to produce its first segment before attaching HLS.js
+      // ffmpeg needs a moment to produce its first HLS segment before the
+      // manifest is fetchable — how long depends on the source (remote-URL
+      // fetch speed, codec, resolution). A single fixed 4s wait was too
+      // optimistic for slower sources and surfaced as a fatal
+      // "manifestLoadError" the instant HLS.js tried (and failed) to fetch
+      // the not-yet-written playlist. Retry with backoff instead of failing
+      // outright on the first miss — give ffmpeg up to ~40s total to start
+      // producing output before giving up for good.
+      const MAX_ATTEMPTS = 8;
+      let attemptsLeft = MAX_ATTEMPTS;
+      const isManifestMiss = (details) => details === 'manifestLoadError' || details === 'manifestLoadTimeOut' || details === 'manifestParsingError';
       const attach = () => {
+        if (this.currentSrc !== this._transcodeFor) return; // superseded by a newer load
         this.hls = new Hls(hlsConfig({ maxBufferLength: 30, enableWorker: true, lowLatencyMode: true }));
         this.hls.loadSource(transcodeUrl);
         this.hls.attachMedia(this.video);
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
         this.hls.on(Hls.Events.ERROR, (_, data) => {
           if (!data.fatal) return;
+          if (isManifestMiss(data.details) && attemptsLeft > 0) {
+            attemptsLeft -= 1;
+            console.warn('[LocalTranscode] manifest not ready yet (' + data.details + ') — retrying, ' + attemptsLeft + ' attempt(s) left…');
+            try { this.hls.destroy(); } catch (e) {}
+            this.hls = null;
+            setTimeout(attach, 4000);
+            return;
+          }
           console.error('[LocalTranscode HLS error]', data.details);
           this._fail('Transcode playback error: ' + data.details);
         });
       };
+      this._transcodeFor = this.currentSrc;
       setTimeout(attach, 4000);
     }
     stop() {
@@ -4752,6 +4905,10 @@
 
   $('#btn-pip').addEventListener('click', openPip);
 
+  // VOD-only "back to library" button — stops playback, drops the overlay out
+  // of vod-mode, and returns to the VOD browse view (#view-vod).
+  $('#btn-vod-back').addEventListener('click', exitVodPlayback);
+
   // Overlay hide on movement
   let overlayHideTimer = null;
   function bumpOverlay() {
@@ -6040,7 +6197,308 @@
     return unrestricted.download;
   }
 
+  // --- Native VOD player (mpv) --------------------------------------------
+  // Browsers can't natively demux .mkv, decode rip-codecs (DTS/TrueHD/AC-3/
+  // E-AC-3), or render embedded styled subtitles (ASS/PGS) — no amount of
+  // ffmpeg-remux tuning changes that fundamental mismatch. mpv (built on the
+  // same FFmpeg decoders plus libass) handles all of it natively with proper
+  // A/V sync and instant track switching, so when it's installed we hand VOD
+  // playback to it directly: it opens in its own native window (true pixel-
+  // level embedding inside Electron isn't feasible cross-platform without
+  // native addons) while we keep a lightweight "now playing externally" state
+  // here so the rest of the app (back button, library, Esc) still behaves.
+  let _mpvUnsub = null;
+  let _mpvActive = false;
+
+  function teardownMpvWatch() {
+    if (_mpvUnsub) { try { _mpvUnsub(); } catch (e) {} _mpvUnsub = null; }
+    _mpvActive = false;
+  }
+
+  // Attempts native playback via mpv. Resolves true if mpv took over,
+  // false if it's unavailable/failed (caller should fall back to in-app).
+  async function tryPlayVodWithMpv(url, title) {
+    if (!(window.xtream && window.xtream.mpvAvailable && window.xtream.mpvPlay)) return false;
+    let available = false;
+    try { available = await window.xtream.mpvAvailable(); } catch (e) {}
+    if (!available) return false;
+
+    let res;
+    try { res = await window.xtream.mpvPlay(url, title); } catch (e) { res = { ok: false, message: e && e.message }; }
+    if (!res || !res.ok) return false;
+
+    teardownMpvWatch();
+    _mpvActive = true;
+    if (window.xtream.onMpvEvent) {
+      _mpvUnsub = window.xtream.onMpvEvent((data) => {
+        if (!data || !_mpvActive) return;
+        if (data.event === 'xtream-closed' || data.event === 'xtream-error' ||
+            (data.event === 'property-change' && data.name === 'eof-reached' && data.data === true)) {
+          // mpv window closed (user closed it, playback ended, or it crashed)
+          // — return to the VOD library the same way exitVodPlayback would.
+          teardownMpvWatch();
+          if (State.mode === 'vod' && $('#view-player') && !$('#view-player').classList.contains('hidden')) {
+            const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+            State.currentChannel = null;
+            setView('vod');
+          }
+        }
+      });
+    }
+    toast('Playing in mpv — native playback for the best .mkv/audio/subtitle support.');
+    return true;
+  }
+
+  // --- Embedded native VOD player (libmpv via native/mpv-addon) -----------
+  // The real "embedded" path: native/mpv-addon decodes and renders frames
+  // in-process (libmpv's software-render API, RGBA buffers) and streams them
+  // here over IPC; we paint each one onto <canvas id="mpv2-canvas"> with
+  // putImageData. Video is genuinely inside the app window — unlike the
+  // external-`mpv` fallback above, which opens mpv's own native window.
+  // Because this surface isn't an HTMLVideoElement, it can't reuse
+  // State.player's transport — it gets its own minimal overlay (play/pause,
+  // seek, volume, exit) drawn on top of the canvas, driven by mpv IPC
+  // commands/properties. Requires the addon to be compiled on this machine
+  // (see native/mpv-addon/BUILD.md); falls back to external mpv / in-app
+  // playback when it isn't.
+  const Mpv2 = {
+    active: false,
+    unsub: null,
+    canvas: null, ctx: null,
+    imageData: null,
+    bar: null,
+    paused: true, position: 0, duration: 0, volume: 80,
+    seeking: false,
+    resizeObs: null,
+
+    teardown() {
+      if (this.unsub) { try { this.unsub(); } catch (e) {} this.unsub = null; }
+      if (this.resizeObs) { try { this.resizeObs.disconnect(); } catch (e) {} this.resizeObs = null; }
+      if (this.bar && this.bar.parentNode) this.bar.parentNode.removeChild(this.bar);
+      this.bar = null;
+      if (this.canvas) { this.canvas.classList.add('hidden'); this.ctx = null; this.imageData = null; }
+      this.active = false;
+      this.paused = true; this.position = 0; this.duration = 0; this.seeking = false;
+    },
+
+    async tryStart(url, title) {
+      if (!(window.xtream && window.xtream.mpv2Available && window.xtream.mpv2Open)) return false;
+      let available = false;
+      try { available = await window.xtream.mpv2Available(); } catch (e) {}
+      if (!available) return false;
+
+      this.canvas = $('#mpv2-canvas');
+      if (!this.canvas) return false;
+      const wrap = $('#player-wrap');
+      const rect = wrap ? wrap.getBoundingClientRect() : { width: 1280, height: 720 };
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(2, Math.round((rect.width || 1280) * dpr));
+      const h = Math.max(2, Math.round((rect.height || 720) * dpr));
+
+      let res;
+      try { res = await window.xtream.mpv2Open(url, title, w, h); }
+      catch (e) { res = { ok: false, message: e && e.message }; }
+      if (!res || !res.ok) return false;
+
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.canvas.classList.remove('hidden');
+      this.ctx = this.canvas.getContext('2d');
+      this.imageData = null;
+      this.active = true;
+      this.paused = true; this.position = 0; this.duration = 0;
+
+      this.buildControls();
+      this.watchResize(wrap, dpr);
+
+      if (window.xtream.onMpv2Event) {
+        this.unsub = window.xtream.onMpv2Event((payload) => this.onEvent(payload));
+      }
+      toast('Playing with the embedded native player — full .mkv/audio/subtitle support, no external app.');
+      return true;
+    },
+
+    watchResize(wrap, dpr) {
+      if (!wrap || typeof ResizeObserver === 'undefined') return;
+      this.resizeObs = new ResizeObserver(() => {
+        if (!this.active || !this.canvas) return;
+        const rect = wrap.getBoundingClientRect();
+        const w = Math.max(2, Math.round(rect.width * (window.devicePixelRatio || 1)));
+        const h = Math.max(2, Math.round(rect.height * (window.devicePixelRatio || 1)));
+        if (w === this.canvas.width && h === this.canvas.height) return;
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.imageData = null;
+        try { window.xtream.mpv2SetSurfaceSize(w, h); } catch (e) {}
+      });
+      this.resizeObs.observe(wrap);
+    },
+
+    onEvent(payload) {
+      if (!payload || !this.active) return;
+      switch (payload.type) {
+        case 'frame':
+          this.paint(payload);
+          break;
+        case 'property-change':
+          this.onProperty(payload.name, payload.value);
+          break;
+        case 'event':
+          if (payload.event === 'end-file' || payload.event === 'shutdown') {
+            // Playback ended (or mpv core died) — behave like exitVodPlayback.
+            this.teardown();
+            try { window.xtream.mpv2Close && window.xtream.mpv2Close(); } catch (e) {}
+            if (State.mode === 'vod') {
+              const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+              State.currentChannel = null;
+              setView('vod');
+            }
+          }
+          break;
+      }
+    },
+
+    onProperty(name, value) {
+      switch (name) {
+        case 'pause': this.paused = !!value; this.syncControls(); break;
+        case 'time-pos': if (!this.seeking && typeof value === 'number') { this.position = value; this.syncControls(); } break;
+        case 'duration': if (typeof value === 'number') { this.duration = value; this.syncControls(); } break;
+        case 'volume': if (typeof value === 'number') { this.volume = value; this.syncControls(); } break;
+      }
+    },
+
+    paint(frame) {
+      if (!this.ctx || !frame || !frame.buffer || !frame.width || !frame.height) return;
+      // frame.buffer arrives as a Uint8Array (structured-cloned from the
+      // addon's Node Buffer) of tightly-packed RGBA rows (stride === w*4).
+      const expected = frame.width * frame.height * 4;
+      let bytes = frame.buffer;
+      if (!(bytes instanceof Uint8ClampedArray)) bytes = new Uint8ClampedArray(bytes.buffer || bytes, bytes.byteOffset || 0, expected);
+      if (!this.imageData || this.imageData.width !== frame.width || this.imageData.height !== frame.height) {
+        this.imageData = new ImageData(frame.width, frame.height);
+      }
+      this.imageData.data.set(bytes.subarray(0, expected));
+      this.ctx.putImageData(this.imageData, 0, 0);
+    },
+
+    // --- minimal transport overlay (play/pause, seek, volume, exit) --------
+    buildControls() {
+      if (this.bar) return;
+      const wrap = $('#player-wrap');
+      if (!wrap) return;
+      const bar = document.createElement('div');
+      bar.id = 'mpv2-controls';
+      bar.style.cssText = 'position:absolute; left:0; right:0; bottom:0; z-index:50; display:flex; align-items:center; gap:12px; padding:14px 22px; background:linear-gradient(transparent, rgba(0,0,0,.75)); font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#fff;';
+      bar.innerHTML = `
+        <button data-act="back" title="Back to library" style="background:none;border:0;color:#fff;font-size:18px;cursor:pointer;opacity:.85">&#8592;</button>
+        <button data-act="playpause" title="Play / Pause (Space)" style="background:none;border:0;color:#fff;font-size:20px;cursor:pointer;width:28px">&#9208;</button>
+        <span data-el="time-cur" style="min-width:46px;text-align:right;opacity:.85">0:00</span>
+        <input data-el="seek" type="range" min="0" max="1000" value="0" step="1" style="flex:1;accent-color:#e50914;cursor:pointer">
+        <span data-el="time-dur" style="min-width:46px;opacity:.85">0:00</span>
+        <span style="opacity:.6">&#128266;</span>
+        <input data-el="volume" type="range" min="0" max="100" value="80" step="1" style="width:90px;accent-color:#fff;cursor:pointer">
+        <span style="font-size:11px;opacity:.55;letter-spacing:.04em;text-transform:uppercase">Native (libmpv)</span>
+      `;
+      wrap.appendChild(bar);
+      this.bar = bar;
+
+      const fmt = (s) => {
+        s = Math.max(0, Math.floor(s || 0));
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+      };
+      this._fmt = fmt;
+      this._els = {
+        playpause: bar.querySelector('[data-act="playpause"]'),
+        cur: bar.querySelector('[data-el="time-cur"]'),
+        dur: bar.querySelector('[data-el="time-dur"]'),
+        seek: bar.querySelector('[data-el="seek"]'),
+        volume: bar.querySelector('[data-el="volume"]'),
+      };
+
+      bar.querySelector('[data-act="back"]').addEventListener('click', () => exitVodPlayback());
+      bar.querySelector('[data-act="playpause"]').addEventListener('click', () => this.togglePause());
+      this._els.seek.addEventListener('input', (e) => {
+        this.seeking = true;
+        const frac = (+e.target.value) / 1000;
+        this.position = frac * (this.duration || 0);
+        this._els.cur.textContent = fmt(this.position);
+      });
+      this._els.seek.addEventListener('change', (e) => {
+        const frac = (+e.target.value) / 1000;
+        const target = frac * (this.duration || 0);
+        this.command(['seek', target, 'absolute']).finally(() => { this.seeking = false; });
+      });
+      this._els.volume.addEventListener('input', (e) => {
+        const v = +e.target.value;
+        this.volume = v;
+        try { window.xtream.mpv2SetProperty('volume', v); } catch (err) {}
+      });
+
+      this._kbHandler = (e) => {
+        if (!this.active) return;
+        if (e.code === 'Space') { e.preventDefault(); this.togglePause(); }
+        else if (e.code === 'ArrowRight') { this.command(['seek', 10, 'relative']); }
+        else if (e.code === 'ArrowLeft') { this.command(['seek', -10, 'relative']); }
+        else if (e.code === 'Escape') { exitVodPlayback(); }
+      };
+      document.addEventListener('keydown', this._kbHandler);
+
+      this.syncControls();
+    },
+
+    syncControls() {
+      if (!this._els) return;
+      this._els.playpause.innerHTML = this.paused ? '&#9658;' : '&#9208;';
+      this._els.cur.textContent = this._fmt(this.position);
+      this._els.dur.textContent = this._fmt(this.duration);
+      if (!this.seeking && this.duration > 0) {
+        this._els.seek.value = String(Math.round((this.position / this.duration) * 1000));
+      }
+      this._els.volume.value = String(Math.round(this.volume));
+    },
+
+    togglePause() {
+      const next = !this.paused;
+      this.paused = next;
+      this.syncControls();
+      try { window.xtream.mpv2SetProperty('pause', next); } catch (e) {}
+    },
+
+    command(cmdArr) {
+      try { return window.xtream.mpv2Command(cmdArr) || Promise.resolve(); }
+      catch (e) { return Promise.resolve(); }
+    },
+  };
+
+  // Tears down the keydown handler too (buildControls adds it).
+  const _mpv2TeardownBase = Mpv2.teardown.bind(Mpv2);
+  Mpv2.teardown = function () {
+    if (this._kbHandler) { try { document.removeEventListener('keydown', this._kbHandler); } catch (e) {} this._kbHandler = null; }
+    _mpv2TeardownBase();
+  };
+
   function playVodUrl(url, title, entry) {
+    teardownMpvWatch();
+    Mpv2.teardown();
+    // Preference order: embedded libmpv (in-window, best) → external mpv
+    // window (still native demux/decode/subs, just its own window) → in-app
+    // browser/ffmpeg pipeline (always available, weakest codec/subtitle
+    // support). Each step only proceeds if the previous one is unavailable
+    // or fails to start.
+    Mpv2.tryStart(url, title).then((handled) => {
+      if (handled) {
+        setView('player');
+        const overlay = $('#player-overlay'); if (overlay) overlay.classList.add('vod-mode');
+        return;
+      }
+      tryPlayVodWithMpv(url, title).then((handledExternal) => {
+        if (!handledExternal) playVodUrlInApp(url, title, entry);
+      });
+    });
+  }
+
+  function playVodUrlInApp(url, title, entry) {
     setView('player');
     State.currentChannel = null;
     try { $('#player-empty').classList.add('hidden'); } catch (e) {}
@@ -6059,7 +6517,52 @@
     resetVodTransport();
     State.player.load(url);
     initVodSeekBar();
+    initVodTrackButtons();
+    initVodScrubPreview(url);
     showOverlayTemporarily();
+    enterVodFullscreen();
+  }
+
+  // VOD now always starts in fullscreen — there's no "fullscreen" button on
+  // the VOD controls anymore (it doesn't make sense for on-demand viewing the
+  // way it does for Live TV), so this is the only way in.
+  function enterVodFullscreen() {
+    const wrap = $('#player-wrap');
+    if (!wrap || document.fullscreenElement) return;
+    try {
+      const req = wrap.requestFullscreen && wrap.requestFullscreen();
+      if (req && req.catch) req.catch(() => {});
+    } catch (e) {}
+  }
+
+  // Stops VOD playback and returns to the VOD library/browse screen.
+  // Wired to both the on-screen "back" button and the Esc key while a VOD is
+  // playing — there was previously no way to back out of the player to the
+  // movies/shows menu short of switching modes entirely.
+  function exitVodPlayback() {
+    if (Mpv2.active) {
+      Mpv2.teardown();
+      try { window.xtream && window.xtream.mpv2Close && window.xtream.mpv2Close(); } catch (e) {}
+      State.currentChannel = null;
+      const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+      setView('vod');
+      return;
+    }
+    if (_mpvActive) {
+      teardownMpvWatch();
+      try { window.xtream && window.xtream.mpvStop && window.xtream.mpvStop(); } catch (e) {}
+      State.currentChannel = null;
+      const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+      setView('vod');
+      return;
+    }
+    try { closeAllTrackMenus(); } catch (e) {}
+    try { resetVodTransport(); } catch (e) {}
+    try { if (document.fullscreenElement) document.exitFullscreen && document.exitFullscreen(); } catch (e) {}
+    try { State.player.stop(); } catch (e) {}
+    const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+    State.currentChannel = null;
+    setView('vod');
   }
 
   // --- VOD transport: skip / fast-forward / rewind state -------------------
@@ -6133,6 +6636,231 @@
       update();
     });
     update();
+  }
+
+  // --- VOD subtitle / audio-track selectors --------------------------------
+  // Builds simple popover menus over the audio-track and subtitle buttons.
+  // Tracks can come from either HLS.js (remuxed/transcoded streams expose
+  // `hls.audioTracks` / `hls.subtitleTracks`) or the native <video> element
+  // (`video.audioTracks` / `video.textTracks` — Chromium support varies by
+  // container, but mp4/mkv direct-play files often carry usable text tracks).
+  const VodTracks = { menuEl: null, kind: null };
+
+  function closeAllTrackMenus() {
+    if (VodTracks.menuEl && VodTracks.menuEl.parentNode) VodTracks.menuEl.parentNode.removeChild(VodTracks.menuEl);
+    VodTracks.menuEl = null;
+    VodTracks.kind = null;
+    const a = $('#btn-audio-track'); if (a) a.classList.remove('is-active');
+    const s = $('#btn-subtitles'); if (s) s.classList.remove('is-active');
+  }
+
+  function getVodAudioTracks() {
+    const player = State.player;
+    if (player && player.hls && Array.isArray(player.hls.audioTracks) && player.hls.audioTracks.length) {
+      return player.hls.audioTracks.map((t, i) => ({
+        id: i, label: t.name || t.lang || ('Track ' + (i + 1)),
+        active: i === player.hls.audioTrack,
+        select: () => { player.hls.audioTrack = i; }
+      }));
+    }
+    const video = player && player.video;
+    if (video && video.audioTracks && video.audioTracks.length > 1) {
+      const list = [];
+      for (let i = 0; i < video.audioTracks.length; i++) {
+        const t = video.audioTracks[i];
+        list.push({
+          id: i, label: t.label || t.language || ('Track ' + (i + 1)),
+          active: t.enabled,
+          select: () => { for (let j = 0; j < video.audioTracks.length; j++) video.audioTracks[j].enabled = (j === i); }
+        });
+      }
+      return list;
+    }
+    return [];
+  }
+
+  function getVodSubtitleTracks() {
+    const player = State.player;
+    const list = [{ id: 'off', label: 'Off', active: true, select: () => {} }];
+    if (player && player.hls && Array.isArray(player.hls.subtitleTracks) && player.hls.subtitleTracks.length) {
+      list[0].select = () => { player.hls.subtitleDisplay = false; player.hls.subtitleTrack = -1; };
+      player.hls.subtitleTracks.forEach((t, i) => {
+        list.push({
+          id: i, label: t.name || t.lang || ('Subtitle ' + (i + 1)),
+          active: player.hls.subtitleDisplay && player.hls.subtitleTrack === i,
+          select: () => { player.hls.subtitleTrack = i; player.hls.subtitleDisplay = true; }
+        });
+      });
+      if (player.hls.subtitleDisplay && player.hls.subtitleTrack >= 0) list[0].active = false;
+      return list;
+    }
+    const video = player && player.video;
+    if (video && video.textTracks && video.textTracks.length) {
+      list[0].select = () => { for (let j = 0; j < video.textTracks.length; j++) video.textTracks[j].mode = 'disabled'; };
+      let anyShowing = false;
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const t = video.textTracks[i];
+        if (t.kind !== 'subtitles' && t.kind !== 'captions') continue;
+        const showing = t.mode === 'showing';
+        if (showing) anyShowing = true;
+        list.push({
+          id: i, label: t.label || t.language || ('Subtitle ' + (i + 1)),
+          active: showing,
+          select: () => { for (let j = 0; j < video.textTracks.length; j++) video.textTracks[j].mode = (j === i ? 'showing' : 'disabled'); }
+        });
+      }
+      list[0].active = !anyShowing;
+      return list.length > 1 ? list : [];
+    }
+    return [];
+  }
+
+  function openTrackMenu(kind, btn, items) {
+    closeAllTrackMenus();
+    if (!items.length) { toast(kind === 'audio' ? 'No alternate audio tracks available' : 'No subtitles available'); return; }
+    const menu = document.createElement('div');
+    menu.className = 'track-menu';
+    items.forEach(item => {
+      const b = document.createElement('button');
+      b.className = 'track-item' + (item.active ? ' active' : '');
+      b.textContent = item.label;
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try { item.select(); } catch (err) {}
+        toast((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + item.label, 1400);
+        closeAllTrackMenus();
+      });
+      menu.appendChild(b);
+    });
+    btn.parentElement.style.position = btn.parentElement.style.position || 'relative';
+    menu.style.right = '0';
+    btn.parentElement.appendChild(menu);
+    VodTracks.menuEl = menu;
+    VodTracks.kind = kind;
+    btn.classList.add('is-active');
+  }
+
+  // Shows/hides the track buttons for the current VOD source and wires their
+  // click handlers (idempotent — safe to call on every `playVodUrl`).
+  function initVodTrackButtons() {
+    const audioBtn = $('#btn-audio-track');
+    const subsBtn = $('#btn-subtitles');
+    if (!audioBtn || !subsBtn) return;
+    closeAllTrackMenus();
+
+    const refresh = () => {
+      const audioTracks = getVodAudioTracks();
+      const subTracks = getVodSubtitleTracks();
+      audioBtn.classList.toggle('has-tracks', audioTracks.length > 0);
+      subsBtn.classList.toggle('has-tracks', subTracks.length > 0);
+    };
+    // Track lists aren't available immediately on load — re-check once
+    // metadata/manifest info comes in, plus shortly after in case HLS.js
+    // parses its track lists slightly later.
+    const video = State.player && State.player.video;
+    if (video) {
+      video.addEventListener('loadedmetadata', refresh, { once: true });
+      setTimeout(refresh, 1500);
+      setTimeout(refresh, 4000);
+    }
+    refresh();
+
+    if (!audioBtn._vodBound) {
+      audioBtn._vodBound = true;
+      audioBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (VodTracks.menuEl && VodTracks.kind === 'audio') { closeAllTrackMenus(); return; }
+        openTrackMenu('audio', audioBtn, getVodAudioTracks());
+      });
+    }
+    if (!subsBtn._vodBound) {
+      subsBtn._vodBound = true;
+      subsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (VodTracks.menuEl && VodTracks.kind === 'subtitles') { closeAllTrackMenus(); return; }
+        openTrackMenu('subtitles', subsBtn, getVodSubtitleTracks());
+      });
+    }
+    if (!VodTracks._docBound) {
+      VodTracks._docBound = true;
+      document.addEventListener('click', () => closeAllTrackMenus());
+    }
+  }
+
+  // --- VOD scrub preview: floating time label + frame-capture thumbnail ----
+  // While dragging the seek thumb, shows a small floating time readout and a
+  // captured-frame thumbnail of where the drag would land, so you can see
+  // what scene you're scrubbing to before you let go.
+  const VodScrub = { offVideo: null, canvas: null, ctx: null, lastUrl: null, seekTimer: null, pendingTime: null };
+
+  function initVodScrubPreview(url) {
+    const seek = $('#vod-seek');
+    const previewEl = $('#vod-scrub-preview');
+    const timeEl = $('#vod-scrub-time');
+    const canvas = $('#vod-scrub-canvas');
+    if (!seek || !previewEl || !timeEl || !canvas) return;
+
+    if (!VodScrub.offVideo) {
+      const off = document.createElement('video');
+      off.muted = true;
+      off.preload = 'auto';
+      off.style.display = 'none';
+      document.body.appendChild(off);
+      VodScrub.offVideo = off;
+      VodScrub.canvas = canvas;
+      VodScrub.ctx = canvas.getContext('2d');
+      off.addEventListener('seeked', () => {
+        try { VodScrub.ctx.drawImage(off, 0, 0, canvas.width, canvas.height); } catch (e) {}
+      });
+    }
+    // Direct-play VOD URLs are plain mp4/mkv files — safe to load a second,
+    // independent <video> against the same URL for frame-grabbing. (Skip for
+    // HLS sources, where a second instance would mean a second HLS.js/manifest
+    // load — not worth the cost just for thumbnails.)
+    const isHls = /m3u8/i.test(url || '');
+    if (!isHls && VodScrub.lastUrl !== url) {
+      VodScrub.lastUrl = url;
+      try { VodScrub.offVideo.src = url; } catch (e) {}
+    } else if (isHls) {
+      VodScrub.lastUrl = null;
+      try { VodScrub.offVideo.removeAttribute('src'); VodScrub.offVideo.load(); } catch (e) {}
+    }
+
+    const positionFloaters = () => {
+      const pct = seek.max > 0 ? (Number(seek.value) / Number(seek.max)) : 0;
+      const trackW = seek.clientWidth || 0;
+      const x = Math.max(20, Math.min(trackW - 20, pct * trackW));
+      previewEl.style.left = x + 'px';
+      timeEl.style.left = x + 'px';
+    };
+
+    const grabFrame = (t) => {
+      const off = VodScrub.offVideo;
+      if (!off || VodScrub.lastUrl == null || !isFinite(t)) return;
+      VodScrub.pendingTime = t;
+      if (VodScrub.seekTimer) clearTimeout(VodScrub.seekTimer);
+      VodScrub.seekTimer = setTimeout(() => {
+        try { off.currentTime = VodScrub.pendingTime; } catch (e) {}
+      }, 120);
+    };
+
+    if (!seek._vodScrubBound) {
+      seek._vodScrubBound = true;
+      seek.addEventListener('input', () => {
+        const t = Number(seek.value);
+        timeEl.textContent = fmtClockTime(t);
+        positionFloaters();
+        timeEl.classList.add('show');
+        if (!isHls && VodScrub.lastUrl) { previewEl.classList.add('show'); grabFrame(t); }
+      });
+      const hideFloaters = () => {
+        timeEl.classList.remove('show');
+        previewEl.classList.remove('show');
+      };
+      seek.addEventListener('change', hideFloaters);
+      seek.addEventListener('mouseleave', hideFloaters);
+      seek.addEventListener('blur', hideFloaters);
+    }
   }
 
   async function resolveAndPlayMovie(imdbId, title, entry) {
@@ -6737,6 +7465,13 @@
         if (s) { setView('player'); playChannel(s); }
         return;
       }
+    }
+    // Esc backs out of VOD playback to the library (mirrors the on-screen
+    // back button) — takes priority over the generic Escape handling below.
+    if (e.key === 'Escape' && State.mode === 'vod' && State.view === 'player') {
+      e.preventDefault();
+      exitVodPlayback();
+      return;
     }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dir = (e.key === 'ArrowRight') ? 1 : -1;

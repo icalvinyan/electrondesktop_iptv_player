@@ -42,4 +42,31 @@ contextBridge.exposeInMainWorld('xtream', {
   // Local transcode — HEVC→H.264 HLS for the in-app player
   localTranscode:     (url) => ipcRenderer.invoke('local:startTranscode', url),
   localTranscodeStop: ()    => ipcRenderer.invoke('local:stopTranscode'),
+  // Native VOD player (mpv) — proper .mkv demuxing, every audio codec, and
+  // styled subtitle rendering, launched as its own window and IPC-controlled.
+  mpvAvailable: ()         => ipcRenderer.invoke('mpv:available'),
+  mpvPlay:      (url, t)   => ipcRenderer.invoke('mpv:play', url, t),
+  mpvCommand:   (cmdArr)   => ipcRenderer.invoke('mpv:command', cmdArr),
+  mpvStop:      ()         => ipcRenderer.invoke('mpv:stop'),
+  onMpvEvent: (cb) => {
+    const h = (_evt, data) => cb(data);
+    ipcRenderer.on('mpv:event', h);
+    return () => ipcRenderer.removeListener('mpv:event', h);
+  },
+  // Embedded libmpv (native addon) — true in-window VOD playback. Renders
+  // RGBA frames in-process and streams them here for a <canvas> to paint;
+  // falls back to xtream.mpv* (external mpv window) or the in-app HLS/ffmpeg
+  // pipeline when the addon hasn't been built on this machine.
+  mpv2Available:       ()              => ipcRenderer.invoke('mpv2:available'),
+  mpv2Open:            (url, t, w, h)  => ipcRenderer.invoke('mpv2:open', url, t, w, h),
+  mpv2Command:         (cmdArr)        => ipcRenderer.invoke('mpv2:command', cmdArr),
+  mpv2SetProperty:     (name, value)   => ipcRenderer.invoke('mpv2:setProperty', name, value),
+  mpv2GetProperty:     (name)          => ipcRenderer.invoke('mpv2:getProperty', name),
+  mpv2SetSurfaceSize:  (w, h)          => ipcRenderer.invoke('mpv2:setSurfaceSize', w, h),
+  mpv2Close:           ()              => ipcRenderer.invoke('mpv2:close'),
+  onMpv2Event: (cb) => {
+    const h = (_evt, data) => cb(data);
+    ipcRenderer.on('mpv2:event', h);
+    return () => ipcRenderer.removeListener('mpv2:event', h);
+  },
 });

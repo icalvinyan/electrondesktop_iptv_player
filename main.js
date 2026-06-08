@@ -12,6 +12,7 @@ const http  = require('node:http');
 const https = require('node:https');
 const tls   = require('node:tls');
 const dgram = require('node:dgram');
+const net   = require('node:net');
 const dns   = require('node:dns');
 const os    = require('node:os');
 const { execFile, spawn } = require('node:child_process');
@@ -103,6 +104,27 @@ function startLocalTranscodeStream(sourceUrl) {
   const playlistPath = path.join(hlsDir, 'playlist.m3u8');
   castProxyLog(`[LocalTranscode] starting ffmpeg HLS → ${hlsDir}`);
 
+  // NOTE: this path is VOD-only (the renderer's "local transcode" fallback for
+  // HEVC video / undecodable audio on on-demand playback). VOD sources are
+  // debrid-resolved cached-torrent files — typically large remuxed .mkv with
+  // multiple audio/subtitle/attachment streams and big Matroska headers — which
+  // behave very differently from the small, steady Live TV channel feeds that
+  // `startTranscodeStream` above is tuned for. A few VOD-specific adjustments:
+  //   • Smaller `-analyzeduration`/`-probesize` so ffmpeg starts producing HLS
+  //     segments (and the playlist) sooner — the renderer was timing out with
+  //     "manifestLoadError" because the playlist file didn't exist yet by the
+  //     time HLS.js tried to fetch it.
+  //   • `?` on the stream maps so a missing/odd-indexed audio track (common in
+  //     multi-audio-track rips) doesn't make ffmpeg exit immediately with no
+  //     output at all.
+  //   • `-sn -dn` to explicitly drop subtitle/data streams from the mux —
+  //     mkv rips often carry these and they can confuse `-f hls` muxing.
+  //   • `-max_muxing_queue_size` to absorb the bursty packet interleaving that
+  //     large mkv remuxes can produce (a very common cause of ffmpeg aborting
+  //     part-way through with "Too many packets buffered for output stream").
+  //   • Dropped `-tune zerolatency` — that's a live-encoding knob; for VOD
+  //     remuxing a finite file it does nothing useful and can hurt encode
+  //     stability/efficiency.
   const proc = spawn(ffBin, [
     '-loglevel', 'error',
     '-user_agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -110,14 +132,16 @@ function startLocalTranscodeStream(sourceUrl) {
     '-reconnect', '1',
     '-reconnect_streamed', '1',
     '-reconnect_delay_max', '5',
+    '-analyzeduration', '3000000',
+    '-probesize', '5000000',
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
     '-i', sourceUrl,
     '-map', '0:v:0',
-    '-map', '0:a:0',
+    '-map', '0:a:0?',
+    '-sn', '-dn',
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
-    '-tune', 'zerolatency',
     '-profile:v', 'main',
     '-level:v', '4.1',
     '-vf', "scale='if(gt(iw,1920),1920,-2)':'if(gt(ih,1080),-2,ih)',format=yuv420p",
@@ -127,6 +151,7 @@ function startLocalTranscodeStream(sourceUrl) {
     '-b:a', '128k',
     '-ar', '48000',
     '-ac', '2',
+    '-max_muxing_queue_size', '4096',
     '-f', 'hls',
     '-hls_time', '2',
     '-hls_list_size', '10',
@@ -656,13 +681,13 @@ function startCastProxyServer() {
       // Poll briefly for the playlist to appear (ffmpeg may not have written it yet).
       // Guard every write with res.headersSent to prevent double-write if two
       // setTimeout callbacks race each other to the same response object.
-      const tryRead = (attemptsLeft) => {
+      const tryRead = (attemptsLeft, delayMs) => {
         if (res.headersSent) return;
         fs.readFile(filePath, (err, data) => {
           if (res.headersSent) return;
           if (err) {
             if (attemptsLeft > 0 && err.code === 'ENOENT') {
-              setTimeout(() => tryRead(attemptsLeft - 1), 300);
+              setTimeout(() => tryRead(attemptsLeft - 1, delayMs), delayMs);
             } else {
               res.writeHead(404); res.end();
             }
@@ -677,7 +702,13 @@ function startCastProxyServer() {
           res.end(data);
         });
       };
-      tryRead(m[1].endsWith('.m3u8') ? 10 : 3); // playlist: wait up to 3s; segments: 0.9s
+      // VOD sources are large remote debrid-resolved files (often .mkv with
+      // big headers) — ffmpeg can take noticeably longer than a Live TV channel
+      // feed to probe the input and write its first playlist/segment. 3s wasn't
+      // enough and the resulting 404s surfaced in the renderer as a fatal
+      // "manifestLoadError" before ffmpeg ever got a chance to catch up.
+      // Give the playlist up to ~24s and segments up to ~6s before giving up.
+      tryRead(m[1].endsWith('.m3u8') ? 80 : 20, m[1].endsWith('.m3u8') ? 300 : 300);
     });
   });
 }
@@ -1736,6 +1767,289 @@ ipcMain.handle('local:stopTranscode',  () => {
     _localTranscodeStream = null;
   }
 });
+
+// ---------- VOD native player (mpv) ----------
+// The browser <video>/HLS.js/ffmpeg-remux pipeline above works, but it can't
+// give VOD playback what it really needs: native demuxing of .mkv containers,
+// every audio codec torrent rips carry (DTS/TrueHD/AC-3/E-AC-3/Atmos), and
+// styled subtitle rendering (ASS/SSA/PGS) — browsers fundamentally can't do
+// any of that, full stop, transcoding workarounds notwithstanding.
+//
+// mpv (built on libmpv/FFmpeg's decoders, plus libass for subtitles) handles
+// all of it natively, with proper audio-clock A/V sync and instant track
+// switching — exactly the "Playback Engine" layer recommended for a desktop
+// app. True pixel-level embedding of mpv's video surface *inside* the Electron
+// BrowserWindow would require a native windowing addon (parenting an external
+// process's window handle into a Chromium layer — there's no off-the-shelf,
+// cross-platform way to do this from Node/Electron without writing native
+// code per-OS). Instead we launch mpv as its own native window — still a
+// fully "embedded"-feeling experience for the user (it opens instantly over
+// the app, title-barred as part of Xtream TV, and closes back to the library
+// on quit/EOF) — and drive it from our own VOD overlay via mpv's JSON IPC
+// socket, so play/pause/seek/volume/track-selection all stay inside our UI.
+let _mpvBin     = undefined; // undefined = not checked yet, false = not found, string = path
+let _mpvProc    = null;
+let _mpvSocket  = null;      // net.Socket — JSON IPC connection
+let _mpvSockPath = null;
+let _mpvReqId   = 1;
+let _mpvPending = new Map(); // request_id -> { resolve, reject, timer }
+let _mpvConnectAttempt = 0;
+
+function findMpv() {
+  if (_mpvBin !== undefined) return _mpvBin;
+  const candidates = process.platform === 'darwin'
+    ? ['/opt/homebrew/bin/mpv', '/usr/local/bin/mpv', '/Applications/mpv.app/Contents/MacOS/mpv']
+    : process.platform === 'win32'
+    ? ['C:\\Program Files\\mpv\\mpv.exe', 'C:\\ProgramData\\chocolatey\\bin\\mpv.exe']
+    : ['/usr/bin/mpv', '/usr/local/bin/mpv', '/snap/bin/mpv'];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) { _mpvBin = c; castProxyLog(`[mpv] found at ${c}`); return _mpvBin; } } catch(_) {}
+  }
+  try {
+    const out = require('node:child_process')
+      .execSync(process.platform === 'win32' ? 'where mpv' : 'command -v mpv', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })
+      .trim().split(/\r?\n/)[0];
+    if (out && fs.existsSync(out)) { _mpvBin = out; castProxyLog(`[mpv] found on PATH at ${out}`); return _mpvBin; }
+  } catch (_) {}
+  castProxyLog('[mpv] not found — install it (e.g. `brew install mpv`) for native VOD playback (proper .mkv/DTS/subtitle support)');
+  _mpvBin = false;
+  return false;
+}
+
+function notifyMpvEvent(payload) {
+  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('mpv:event', payload);
+  }
+}
+
+function closeMpvSocket() {
+  if (_mpvSocket) { try { _mpvSocket.destroy(); } catch(_) {} _mpvSocket = null; }
+  for (const { reject, timer } of _mpvPending.values()) { clearTimeout(timer); try { reject(new Error('mpv connection closed')); } catch(_){} }
+  _mpvPending.clear();
+  _mpvSockPath = null;
+}
+
+function stopMpv() {
+  closeMpvSocket();
+  if (_mpvProc) {
+    try { _mpvProc.kill(); } catch(_) {}
+    _mpvProc = null;
+  }
+}
+
+function connectMpvSocket(sockPath) {
+  _mpvConnectAttempt = 0;
+  const tryConnect = () => {
+    _mpvConnectAttempt += 1;
+    const sock = net.connect(sockPath);
+    let buf = '';
+    sock.on('connect', () => {
+      _mpvSocket = sock;
+      castProxyLog('[mpv] IPC socket connected');
+      // Subscribe to the properties the renderer's overlay needs to mirror.
+      ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
+       'track-list', 'sub-text', 'eof-reached', 'playback-time', 'seeking']
+        .forEach((prop, i) => {
+          try { sock.write(JSON.stringify({ command: ['observe_property', i + 1, prop] }) + '\n'); } catch(_){}
+        });
+      notifyMpvEvent({ event: 'xtream-connected' });
+    });
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch (e) { continue; }
+        if (msg && msg.request_id != null && _mpvPending.has(msg.request_id)) {
+          const p = _mpvPending.get(msg.request_id);
+          _mpvPending.delete(msg.request_id);
+          clearTimeout(p.timer);
+          if (msg.error && msg.error !== 'success') p.reject(new Error(msg.error));
+          else p.resolve(msg.data !== undefined ? msg.data : msg);
+        } else if (msg && msg.event) {
+          notifyMpvEvent(msg);
+        }
+      }
+    });
+    sock.on('error', () => {
+      // mpv may not have created the socket yet — retry briefly.
+      if (_mpvConnectAttempt < 40 && _mpvProc) setTimeout(tryConnect, 150);
+    });
+    sock.on('close', () => {
+      if (_mpvSocket === sock) _mpvSocket = null;
+    });
+  };
+  tryConnect();
+}
+
+function sendMpvCommand(cmdArr) {
+  return new Promise((resolve, reject) => {
+    if (!_mpvSocket) { reject(new Error('mpv not connected')); return; }
+    const id = _mpvReqId++;
+    const timer = setTimeout(() => {
+      if (_mpvPending.has(id)) { _mpvPending.delete(id); reject(new Error('mpv command timed out')); }
+    }, 6000);
+    _mpvPending.set(id, { resolve, reject, timer });
+    try {
+      _mpvSocket.write(JSON.stringify({ command: cmdArr, request_id: id }) + '\n');
+    } catch (e) {
+      _mpvPending.delete(id);
+      clearTimeout(timer);
+      reject(e);
+    }
+  });
+}
+
+// Launches mpv against a VOD URL, in its own native window with a JSON IPC
+// socket for control. Returns { ok:true } or { ok:false, reason }.
+function startMpvPlayback(url, title) {
+  stopMpv();
+  const bin = findMpv();
+  if (!bin) return { ok: false, reason: 'not-found' };
+
+  const sockPath = process.platform === 'win32'
+    ? ('\\\\.\\pipe\\xtream-mpv-' + process.pid + '-' + Date.now())
+    : path.join(os.tmpdir(), `xtream-mpv-${process.pid}-${Date.now()}.sock`);
+
+  if (process.platform !== 'win32') { try { fs.unlinkSync(sockPath); } catch(_) {} }
+
+  const args = [
+    `--input-ipc-server=${sockPath}`,
+    '--force-window=yes',
+    '--idle=yes',
+    '--keep-open=yes',
+    '--autofit-larger=100%x100%',
+    '--title=' + (title ? `${title} — Xtream TV` : 'Xtream TV — Now Playing'),
+    '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    // Subtitle/OSD niceties — mpv demuxes embedded ASS/SRT/PGS tracks itself.
+    '--sub-auto=fuzzy',
+    '--osc=yes',
+    url,
+  ];
+  castProxyLog(`[mpv] launching: ${bin} (socket=${sockPath})`);
+  let proc;
+  try {
+    proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (e) {
+    castProxyLog(`[mpv] spawn failed: ${e.message}`);
+    return { ok: false, reason: 'spawn-failed', message: e.message };
+  }
+  _mpvProc = proc;
+  _mpvSockPath = sockPath;
+
+  proc.stderr && proc.stderr.on('data', d => castProxyLog(`[mpv] ${d.toString().trim()}`));
+  proc.on('error', e => {
+    castProxyLog(`[mpv] process error: ${e.message}`);
+    if (_mpvProc === proc) { _mpvProc = null; closeMpvSocket(); notifyMpvEvent({ event: 'xtream-error', message: e.message }); }
+  });
+  proc.on('exit', (code, sig) => {
+    castProxyLog(`[mpv] exited code=${code} signal=${sig}`);
+    if (_mpvProc === proc) {
+      _mpvProc = null;
+      closeMpvSocket();
+      notifyMpvEvent({ event: 'xtream-closed', code, signal: sig });
+    }
+  });
+
+  // Give mpv a brief head start to create the socket file before connecting.
+  setTimeout(() => connectMpvSocket(sockPath), 250);
+  return { ok: true };
+}
+
+ipcMain.handle('mpv:available', () => !!findMpv());
+ipcMain.handle('mpv:play', (_e, url, title) => startMpvPlayback(url, title));
+ipcMain.handle('mpv:command', (_e, cmdArr) => sendMpvCommand(cmdArr));
+ipcMain.handle('mpv:stop', () => { stopMpv(); return true; });
+
+app.on('before-quit', () => { try { stopMpv(); } catch(_) {} });
+
+// ---------- VOD native player — embedded libmpv (in-window) ----------
+// This is the "true embedding" path: native/mpv-addon wraps libmpv's client +
+// software-render API in an N-API addon, decoding/rendering frames in-process
+// and handing us RGBA buffers we forward straight to the renderer to paint
+// onto a <canvas> — actually inside the app window, not a separate process's
+// window like the external-`mpv` path above (which stays as the no-build-step
+// fallback when this addon hasn't been compiled on the user's machine; see
+// native/mpv-addon/BUILD.md for how to build/bundle it).
+let _mpvAddon = null;
+function loadMpvAddon() {
+  if (_mpvAddon !== null) return _mpvAddon;
+  try {
+    _mpvAddon = require('./native/mpv-addon');
+    if (_mpvAddon.available) castProxyLog('[mpv2] embedded libmpv addon loaded');
+    else castProxyLog(`[mpv2] embedded libmpv addon not built: ${_mpvAddon.error}`);
+  } catch (e) {
+    castProxyLog(`[mpv2] failed to load addon: ${e.message}`);
+    _mpvAddon = { available: false, error: e.message, MpvPlayer: null };
+  }
+  return _mpvAddon;
+}
+
+let _mpvPlayer = null; // native MpvPlayer instance for the active VOD session
+
+function notifyMpv2(payload) {
+  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('mpv2:event', payload);
+  }
+}
+
+function closeMpv2() {
+  if (_mpvPlayer) {
+    try { _mpvPlayer.destroy(); } catch (_) {}
+    _mpvPlayer = null;
+  }
+}
+
+function openMpv2(url, title, surfaceW, surfaceH) {
+  const addon = loadMpvAddon();
+  if (!addon.available || !addon.MpvPlayer) return { ok: false, reason: 'not-built', message: addon.error };
+
+  closeMpv2();
+  try {
+    _mpvPlayer = new addon.MpvPlayer((payload) => {
+      // Frame buffers arrive as Node Buffers — forward as-is; structured
+      // clone turns them into Uint8Array on the renderer side, which the
+      // canvas surface wraps in a Uint8ClampedArray for putImageData with
+      // zero extra copies.
+      notifyMpv2(payload);
+    });
+    if (surfaceW && surfaceH) _mpvPlayer.setSurfaceSize(surfaceW, surfaceH);
+    // Properties the renderer's overlay needs to mirror playback state —
+    // mirrors the set the external-mpv IPC path observes for parity.
+    ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
+     'track-list', 'sub-text', 'eof-reached', 'seeking', 'core-idle']
+      .forEach(p => { try { _mpvPlayer.observeProperty(p); } catch(_){} });
+    _mpvPlayer.loadFile(url);
+    castProxyLog(`[mpv2] embedded playback started: ${title || url}`);
+    return { ok: true };
+  } catch (e) {
+    castProxyLog(`[mpv2] open failed: ${e.message}`);
+    closeMpv2();
+    return { ok: false, reason: 'error', message: e.message };
+  }
+}
+
+ipcMain.handle('mpv2:available', () => !!loadMpvAddon().available);
+ipcMain.handle('mpv2:open', (_e, url, title, w, h) => openMpv2(url, title, w, h));
+ipcMain.handle('mpv2:command', (_e, cmdArr) => {
+  if (!_mpvPlayer) return Promise.reject(new Error('no active embedded player'));
+  return _mpvPlayer.command(cmdArr);
+});
+ipcMain.handle('mpv2:setProperty', (_e, name, value) => {
+  if (_mpvPlayer) _mpvPlayer.setProperty(name, value);
+  return true;
+});
+ipcMain.handle('mpv2:getProperty', (_e, name) => (_mpvPlayer ? _mpvPlayer.getProperty(name) : null));
+ipcMain.handle('mpv2:setSurfaceSize', (_e, w, h) => {
+  if (_mpvPlayer) _mpvPlayer.setSurfaceSize(w, h);
+  return true;
+});
+ipcMain.handle('mpv2:close', () => { closeMpv2(); return true; });
+
+app.on('before-quit', () => { try { closeMpv2(); } catch(_) {} });
 
 // ---------- application menu ----------
 function buildMenu() {
