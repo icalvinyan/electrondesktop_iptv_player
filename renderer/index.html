@@ -625,8 +625,42 @@
     font-size:11px; padding:3px 8px; border-radius:999px; background: rgba(0,0,0,.45); color:#cfe0ff;
     display:flex; align-items:center; gap:6px;
   }
-  .player-overlay .status-badge .dot { width:8px; height:8px; border-radius:50%; background: var(--accent); animation: pulse 1.4s infinite; }
+  .player-overlay .status-badge .dot { width:8px; height:8px; border-radius:50%; background: var(--accent); }
   .player-overlay .status-badge.live .dot { background: var(--danger); }
+  /* VOD mode: hide live-TV-only chrome, show clearlogo + seek bar instead */
+  .player-overlay.vod-mode #ov-status,
+  .player-overlay.vod-mode #signal-bars,
+  .player-overlay.vod-mode #btn-live,
+  .player-overlay.vod-mode #btn-guide,
+  .player-overlay.vod-mode #btn-fav,
+  .player-overlay.vod-mode #btn-copy-url,
+  .player-overlay.vod-mode .ch-logo-wrap,
+  .player-overlay.vod-mode .ch-name,
+  .player-overlay.vod-mode .ch-now,
+  .player-overlay.vod-mode .ch-next { display: none !important; }
+  .player-overlay .ov-clearlogo {
+    display: none;
+    max-height: 64px; max-width: 260px; object-fit: contain;
+    filter: drop-shadow(0 2px 10px rgba(0,0,0,.5));
+  }
+  .player-overlay.vod-mode .ov-clearlogo[src] { display: block; }
+  .player-overlay.vod-mode #vod-seek-row { display: flex !important; }
+  .vod-seek-row { display:flex; align-items:center; gap:10px; margin: 0 0 10px; }
+  .vod-seek-row .vod-time { font-variant-numeric: tabular-nums; color:#cfe0ff; font-size:12px; min-width:46px; text-align:center; }
+  .vod-seek-row .vod-time.end { text-align:left; }
+  .vod-seek {
+    flex:1; appearance:none; -webkit-appearance:none; height:5px; border-radius:999px;
+    background: rgba(255,255,255,0.18); outline:none; cursor:pointer;
+    accent-color: var(--accent);
+  }
+  .vod-seek::-webkit-slider-thumb {
+    -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+    background: var(--accent); border: 2px solid #fff; cursor:pointer; margin-top:-1px;
+  }
+  .vod-seek::-moz-range-thumb {
+    width:14px; height:14px; border-radius:50%;
+    background: var(--accent); border: 2px solid #fff; cursor:pointer;
+  }
   /* Renamed from .guide-header to avoid colliding with the existing sticky in-grid
      header used by the channel column. */
   .guide-top-row {
@@ -707,7 +741,6 @@
   .guide-mini:hover .guide-mini-hint { opacity: 1; }
   .guide-top-row .guide-toolbar { flex: 1; min-width: 0; border-bottom: none; align-self: center; }
   #view-guide #guide-toolbar { display: none !important; }
-  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
   .player-empty {
     color: var(--muted); display:flex; flex-direction:column; align-items:center; gap:14px;
     text-align:center;
@@ -1553,11 +1586,17 @@
                   <div class="ch-meta">
                     <span class="ch-num-pill" id="ov-num">—</span>
                     <span class="ch-name" id="ov-name">No channel selected</span>
+                    <img class="ov-clearlogo" id="ov-clearlogo" referrerpolicy="no-referrer" alt="" onerror="this.removeAttribute('src')">
                     <span id="ov-quality"></span>
                   </div>
                   <div class="ch-now" id="ov-now"></div>
                   <div class="ch-next" id="ov-next"></div>
                 </div>
+              </div>
+              <div class="vod-seek-row" id="vod-seek-row" style="display:none">
+                <span class="vod-time" id="vod-time-cur">0:00</span>
+                <input type="range" class="vod-seek" id="vod-seek" min="0" max="1000" value="0" step="1">
+                <span class="vod-time end" id="vod-time-dur">0:00</span>
               </div>
               <div class="controls-bar">
                 <div class="controls-left">
@@ -4119,6 +4158,9 @@
     if (!stream) return;
     State.currentChannel = stream;
     markActiveChannel();
+    const overlayEl = $('#player-overlay'); if (overlayEl) overlayEl.classList.remove('vod-mode');
+    try { resetVodTransport(); } catch (e) {}
+    const clearlogoEl = $('#ov-clearlogo'); if (clearlogoEl) clearlogoEl.removeAttribute('src');
     $('#player-empty').classList.add('hidden');
     $('#ov-num').textContent  = stream.num ? ('CH ' + stream.num) : 'CH —';
     $('#ov-name').textContent = stream.name || '';
@@ -4574,8 +4616,54 @@
     }
     return list[idx];
   }
-  $('#btn-next').addEventListener('click', () => { const n = neighborChannel(1); if (n) playChannel(n); });
-  $('#btn-prev').addEventListener('click', () => { const n = neighborChannel(-1); if (n) playChannel(n); });
+  // FF/rewind step sequence used in VOD mode (cycles back to normal speed at the end).
+  const VOD_FF_STEPS = [2, 4, 8, 16];
+
+  function vodFastForward(dir) {
+    const video = State.player && State.player.video;
+    if (!video) return;
+    if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
+
+    if (VodTransport.ffDir !== dir) { VodTransport.ffDir = dir; VodTransport.ffRate = 1; }
+    const idx = VOD_FF_STEPS.indexOf(VodTransport.ffRate);
+    const next = (idx === -1 || idx === VOD_FF_STEPS.length - 1) ? null : VOD_FF_STEPS[idx + 1];
+
+    if (VodTransport.ffRate === 1) {
+      VodTransport.ffRate = VOD_FF_STEPS[0];
+    } else if (next) {
+      VodTransport.ffRate = next;
+    } else {
+      // Wrap back to normal playback.
+      VodTransport.ffRate = 1;
+      VodTransport.ffDir = 0;
+      try { video.playbackRate = 1; } catch (e) {}
+      toast('Normal speed');
+      return;
+    }
+
+    if (dir > 0) {
+      // Native forward fast-play via playbackRate.
+      try { video.playbackRate = VodTransport.ffRate; } catch (e) {}
+      toast('▶▶ ' + VodTransport.ffRate + 'x');
+    } else {
+      // HTML5 video can't play in reverse — simulate rewind by stepping currentTime backward.
+      try { video.playbackRate = 1; } catch (e) {}
+      const rate = VodTransport.ffRate;
+      VodTransport.ffTimer = setInterval(() => {
+        try { video.currentTime = Math.max(0, (video.currentTime || 0) - (rate * 0.25)); } catch (e) {}
+      }, 250);
+      toast('◀◀ ' + rate + 'x');
+    }
+  }
+
+  $('#btn-next').addEventListener('click', () => {
+    if (State.mode === 'vod') { vodFastForward(1); return; }
+    const n = neighborChannel(1); if (n) playChannel(n);
+  });
+  $('#btn-prev').addEventListener('click', () => {
+    if (State.mode === 'vod') { vodFastForward(-1); return; }
+    const n = neighborChannel(-1); if (n) playChannel(n);
+  });
   function setPlayIcon(playing) {
     const btn = $('#btn-play');
     const ip = btn.querySelector('.ic-play');
@@ -4584,6 +4672,7 @@
     if (ipa) ipa.style.display = playing ? '' : 'none';
   }
   $('#btn-play').addEventListener('click', () => {
+    if (State.mode === 'vod' && (VodTransport.ffRate !== 1 || VodTransport.ffTimer)) { resetVodTransport(); }
     if (State.player.isPlaying()) { State.player.pause(); setPlayIcon(false); }
     else { State.player.play(); setPlayIcon(true); }
   });
@@ -5683,7 +5772,7 @@
       toast('Series playback is coming soon — movies are supported first.');
       return;
     }
-    resolveAndPlayMovie(imdb, vodTitleOf(f.entry));
+    resolveAndPlayMovie(imdb, vodTitleOf(f.entry), f.entry);
   });
 
   /* ---- Stream sourcing: Torrentio / AIOStreams ---- */
@@ -5751,19 +5840,42 @@
   };
 
   function parseStreamResult(s) {
-    // Torrentio/AIOStreams "stream" objects expose a magnet-ish infoHash + title blob.
-    const title = s.title || s.name || '';
-    const sizeMatch = title.match(/💾\s*([\d.]+\s*[KMGT]?B)/i) || title.match(/([\d.]+\s*[KMGT]B)/i);
-    const seedMatch = title.match(/👤\s*(\d+)/);
-    const qualityMatch = title.match(/\b(4K|2160p|1080p|720p|480p)\b/i);
+    // Torrentio/AIOStreams "stream" objects pack a rich, emoji-tagged, multi-line
+    // info blob into `title` (size, codecs, runtime, seeders, age, source,
+    // languages, filename/path), with a short provider+quality label in `name`.
+    const blob = s.title || s.description || s.name || '';
+    const lines = blob.split('\n').map(l => l.trim()).filter(Boolean);
+    const label = (s.name || '').split('\n')[0] || lines[0] || 'Unknown';
+
+    const sizeMatch    = blob.match(/💾\s*([\d.]+\s*[KMGT]?i?B)/i) || blob.match(/📦\s*([\d.]+\s*[KMGT]?i?B(?:\s*\/\s*[\d.]+\s*[KMGT]?i?B)?)/i) || blob.match(/([\d.]+\s*[KMGT]i?B)/i);
+    const seedMatch    = blob.match(/👤\s*(\d+)/) || blob.match(/👥\s*(\d+)/) || blob.match(/seeds?\D{0,3}(\d+)/i);
+    const qualityMatch = blob.match(/\b(4K|2160p|1080p|720p|480p)\b/i);
+    const runtimeMatch = blob.match(/⏱️?\s*([\dhms:\s]+(?:[hms]))/i);
+    const ageMatch     = blob.match(/📅\s*([^\s|]+)/);
+    const sourceMatch  = blob.match(/🔍\s*([^\s|📦📅👥👤]+)/);
+    const langMatch    = blob.match(/🌎\s*([^\n]+)/) || blob.match(/🌐\s*([^\n]+)/);
+    // The filename/path is typically the longest line and contains a file extension.
+    const fileLine = lines.slice().reverse().find(l => /\.\w{2,4}$/.test(l)) ||
+                     (s.behaviorHints && s.behaviorHints.filename) || '';
+
     return {
       raw: s,
       infoHash: s.infoHash || '',
+      // Some providers (e.g. AIOStreams, MediaFusion configured with a debrid
+      // service) resolve everything server-side and just hand back a direct,
+      // ready-to-play URL — no torrent hash for us to resolve ourselves.
+      url: s.url || '',
       fileIdx: (typeof s.fileIdx === 'number') ? s.fileIdx : null,
-      title: title.split('\n')[0] || (s.name || 'Unknown'),
-      size: sizeMatch ? sizeMatch[1] : '',
+      title: label,
+      lines,
+      filename: fileLine,
+      size: sizeMatch ? sizeMatch[1].replace(/\s+/g, ' ') : '',
       seeders: seedMatch ? parseInt(seedMatch[1], 10) : 0,
       quality: qualityMatch ? qualityMatch[1].toUpperCase() : '',
+      runtime: runtimeMatch ? runtimeMatch[1].trim() : '',
+      age: ageMatch ? ageMatch[1] : '',
+      source: sourceMatch ? sourceMatch[1] : '',
+      languages: langMatch ? langMatch[1].trim() : '',
     };
   }
 
@@ -5781,11 +5893,17 @@
           <header><h2>Choose a stream</h2><button class="ghost" id="vod-picker-close">✕</button></header>
           <section>
             <div style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto;">
-              ${parsedList.map((p, i) => `
+              ${parsedList.map((p, i) => {
+                // Show every metadata line the provider sent us (size, codecs,
+                // runtime/seeders/source, languages, filename, …) — mirrors how
+                // Torrentio/AIOStreams format their stream titles.
+                const metaLines = (p.lines && p.lines.length ? p.lines : [p.title]).slice(0, 6);
+                return `
                 <button class="vod-pick-row" data-idx="${i}" style="text-align:left; display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:8px; background:var(--bg-2); border:1px solid var(--line);">
                   <span style="font-weight:600; font-size:13px;">${escapeHtml(p.title)}</span>
-                  <span style="font-size:11px; color:var(--muted);">${[p.quality, p.size, p.seeders ? p.seeders + ' seeders' : ''].filter(Boolean).join(' · ')}</span>
-                </button>`).join('')}
+                  ${metaLines.map((l, idx) => `<span style="font-size:11.5px; color:${idx === metaLines.length - 1 && p.filename === l ? 'var(--dim)' : 'var(--muted)'}; ${p.filename === l ? 'word-break:break-all; font-family: var(--mono, monospace);' : ''}">${escapeHtml(l)}</span>`).join('')}
+                </button>`;
+              }).join('')}
             </div>
           </section>
         </div>`;
@@ -5922,29 +6040,111 @@
     return unrestricted.download;
   }
 
-  function playVodUrl(url, title) {
+  function playVodUrl(url, title, entry) {
     setView('player');
     State.currentChannel = null;
     try { $('#player-empty').classList.add('hidden'); } catch (e) {}
+    const overlay = $('#player-overlay'); if (overlay) overlay.classList.add('vod-mode');
     const numEl = $('#ov-num'); if (numEl) numEl.textContent = 'VOD';
     const nameEl = $('#ov-name'); if (nameEl) nameEl.textContent = title || '';
     const nowEl = $('#ov-now'); if (nowEl) nowEl.textContent = '';
     const nextEl = $('#ov-next'); if (nextEl) nextEl.textContent = '';
     const logoEl = $('#ov-logo'); if (logoEl) { logoEl.removeAttribute('src'); logoEl.style.display = 'none'; }
+    const clearlogoEl = $('#ov-clearlogo');
+    if (clearlogoEl) {
+      const logoUrl = entry && entry._logo;
+      if (logoUrl) { clearlogoEl.src = logoUrl; clearlogoEl.alt = title || ''; }
+      else { clearlogoEl.removeAttribute('src'); }
+    }
+    resetVodTransport();
     State.player.load(url);
+    initVodSeekBar();
     showOverlayTemporarily();
   }
 
-  async function resolveAndPlayMovie(imdbId, title) {
+  // --- VOD transport: skip / fast-forward / rewind state -------------------
+  const VodTransport = {
+    skipDir: 0, skipStreak: 0, skipTimer: null,
+    ffRate: 1, ffDir: 0, ffTimer: null,
+  };
+
+  function resetVodTransport() {
+    VodTransport.skipDir = 0; VodTransport.skipStreak = 0;
+    if (VodTransport.skipTimer) { clearTimeout(VodTransport.skipTimer); VodTransport.skipTimer = null; }
+    VodTransport.ffRate = 1; VodTransport.ffDir = 0;
+    if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
+    try { State.player.video.playbackRate = 1; } catch (e) {}
+  }
+
+  // Skip ±10s on consecutive presses of the same direction; the increment grows
+  // with each press in a row (10s, 20s, 30s, …) and resets after a short pause.
+  function vodSkip(dir) {
+    const video = State.player && State.player.video;
+    if (!video) return;
+    if (VodTransport.skipTimer) clearTimeout(VodTransport.skipTimer);
+    if (VodTransport.skipDir === dir) { VodTransport.skipStreak += 1; }
+    else { VodTransport.skipDir = dir; VodTransport.skipStreak = 1; }
+    const amount = 10 * VodTransport.skipStreak;
+    const dur = video.duration || Infinity;
+    try { video.currentTime = Math.max(0, Math.min(dur, (video.currentTime || 0) + dir * amount)); } catch (e) {}
+    toast((dir > 0 ? '+' : '−') + amount + 's', 900);
+    VodTransport.skipTimer = setTimeout(() => { VodTransport.skipDir = 0; VodTransport.skipStreak = 0; }, 1200);
+  }
+
+  function fmtClockTime(secs) {
+    if (!isFinite(secs) || secs < 0) secs = 0;
+    secs = Math.floor(secs);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function initVodSeekBar() {
+    const video = State.player && State.player.video;
+    const seek = $('#vod-seek');
+    const curEl = $('#vod-time-cur');
+    const durEl = $('#vod-time-dur');
+    if (!video || !seek) return;
+    if (seek._vodBound) return; // listeners attached once; values refresh per-load via timeupdate/loadedmetadata
+    seek._vodBound = true;
+    let scrubbing = false;
+    const update = () => {
+      if (scrubbing) return;
+      const dur = video.duration || 0;
+      if (dur > 0) {
+        seek.max = String(Math.floor(dur));
+        seek.value = String(Math.floor(video.currentTime || 0));
+      }
+      if (curEl) curEl.textContent = fmtClockTime(video.currentTime || 0);
+      if (durEl) durEl.textContent = fmtClockTime(dur);
+    };
+    video.addEventListener('timeupdate', update);
+    video.addEventListener('loadedmetadata', update);
+    video.addEventListener('durationchange', update);
+    seek.addEventListener('input', () => {
+      scrubbing = true;
+      if (curEl) curEl.textContent = fmtClockTime(Number(seek.value));
+    });
+    seek.addEventListener('change', () => {
+      try { video.currentTime = Number(seek.value); } catch (e) {}
+      scrubbing = false;
+      update();
+    });
+    update();
+  }
+
+  async function resolveAndPlayMovie(imdbId, title, entry) {
     vodLog('resolveAndPlayMovie start:', { imdbId, title });
     toast('Looking for streams for "' + title + '"…', 8000);
     try {
       const raw = await StreamScrapers.queryMovie(imdbId);
       vodLog('Raw scraper results:', raw.length);
       if (!raw.length) { toast('No streams found for "' + title + '".'); return; }
-      const parsed = raw.map(parseStreamResult).filter(p => p.infoHash);
-      vodLog('Parsed results with usable torrent hashes:', parsed.length, '/', raw.length);
-      if (!parsed.length) { toast('Found results, but none were usable torrents.'); return; }
+      const parsed = raw.map(parseStreamResult).filter(p => p.infoHash || p.url);
+      vodLog('Parsed results with usable streams (hash or direct URL):', parsed.length, '/', raw.length);
+      if (!parsed.length) { toast('Found results, but none were usable streams.'); return; }
 
       let chosen;
       if (Storage.getAutoPickStream()) {
@@ -5956,10 +6156,19 @@
         vodLog('User-picked stream:', chosen && chosen.title);
       }
 
-      toast('Resolving via Real-Debrid…', 8000);
-      const url = await debridResolve(chosen, (msg) => { vodLog('Debrid status:', msg); toast(msg, 8000); });
-      vodLog('Resolved playable URL (Real-Debrid):', url);
-      playVodUrl(url, title);
+      let url;
+      if (chosen.url) {
+        // Provider already resolved this to a direct, ready-to-play link
+        // (e.g. AIOStreams proxying through your linked debrid account) —
+        // no need to send it through this app's own Real-Debrid step too.
+        vodLog('Using provider-resolved direct URL:', chosen.url);
+        url = chosen.url;
+      } else {
+        toast('Resolving via Real-Debrid…', 8000);
+        url = await debridResolve(chosen, (msg) => { vodLog('Debrid status:', msg); toast(msg, 8000); });
+        vodLog('Resolved playable URL (Real-Debrid):', url);
+      }
+      playVodUrl(url, title, entry);
       toast('Now playing: ' + title);
     } catch (e) {
       vodErr('resolveAndPlayMovie failed:', { imdbId, title }, e && (e.stack || e.message || e));
@@ -6531,6 +6740,11 @@
     }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dir = (e.key === 'ArrowRight') ? 1 : -1;
+      if (State.mode === 'vod' && State.view === 'player' && State.player && State.player.video) {
+        e.preventDefault();
+        vodSkip(dir);
+        return;
+      }
       if (getFullscreenMultiTileIdx() >= 0) {
         e.preventDefault();
         cycleMultiFullscreen(dir);

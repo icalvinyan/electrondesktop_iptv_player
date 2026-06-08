@@ -3,7 +3,7 @@ Run these in Terminal (in the iptv-player-v2 folder):
 cd ~/Documents/Claude/Projects/iptv-player-v2
 rm -f .git/index.lock .git/HEAD.lock
 git add -A
-git commit -m "Replace hardcoded scraper with user-managed provider/repository system; relocate VOD nav; fix spotlight banner; surface Cloudflare-bypass logs in DevTools"
+git commit -m "VOD player controls overhaul + support providers (AIOStreams) that return pre-resolved direct playback URLs"
 git push
 
 Then quit the running Xtream TV app completely and relaunch it
@@ -14,68 +14,60 @@ full quit-and-relaunch (not just a page reload) is required for them to take eff
 WHAT'S NEW IN THIS BUILD
 ========================
 
-1. NO SCRAPER IS HARDCODED INTO THE APP ANYMORE
-   Torrentio (and AIOStreams) used to be baked in, and Torrentio's Cloudflare
-   protection was actively blocking this app's requests (403 "Attention
-   Required"). Rather than fight that indefinitely, the VOD layer has been
-   rebuilt around a "provider" system — the same approach apps like
-   Cloudstream/Syncler/Weyd use:
-     • The app itself is just a player + metadata browser.
-     • YOU choose which stream sources ("providers") to use, by pasting a URL
-       in Settings. Nothing is pre-installed.
-   This also means if one source gets blocked or shuts down, you can simply
-   swap in another — no app update required.
+1. VOD PLAYER NOW HAS ITS OWN CONTROL SET (separate from Live TV)
+   The on-screen player overlay is shared between Live TV and VOD, but VOD
+   playback works very differently from a channel feed — so its controls have
+   been redesigned:
+     • Removed the "stream strength" bars and "● LIVE" badge (not meaningful
+       for on-demand video).
+     • Removed the guide / favorite / copy-stream-URL buttons (Live-TV-only
+       features).
+     • Removed the flashing red dot on the status badge altogether — in BOTH
+       the VOD and Live TV overlays.
+     • The plain-text title is replaced by the movie/show's clearlogo artwork,
+       and the channel-logo box is hidden.
+     • Added a scrub/seek bar with elapsed/remaining time, click-and-drag to
+       jump to any point in the video.
+     • Left/Right arrow keys now skip ±10 seconds; pressing the same direction
+       repeatedly in quick succession increases the jump size each time
+       (10s → 20s → 30s → …), then resets after a short pause.
+     • The on-screen prev/next buttons now act as rewind / fast-forward:
+       each click bumps the speed (2x → 4x → 8x → 16x), then wraps back to
+       normal playback. Pressing Play/Pause also resets to normal speed.
 
-2. HOW TO ADD PROVIDERS (Settings → Stream providers)
-   A "provider" is any source that speaks the standard Stremio-addon protocol
-   (a `manifest.json` exposing a `stream` resource for movies/shows — this is
-   a widely-used open format, so lots of community addons are compatible).
-   You can add them two ways:
-     • Single provider — paste a manifest URL or base URL (e.g.
-       "https://example.org/manifest.json" or just "https://example.org") into
-       the "Add provider" box and click Add. The app fetches and validates the
-       manifest, confirms it can supply streams, and adds it to your list.
-     • Repository (bulk add) — paste a URL to a JSON file listing multiple
-       providers (an array of {"name","url"} entries, or {"providers":[...]})
-       into the "Add from repository" box. The app validates and adds every
-       entry it can.
-   Search online for "Stremio addons" to find sources — if you previously used
-   Torrentio or AIOStreams successfully, you can add them back the same way
-   (e.g. paste "https://torrentio.strem.fun" or "https://aiostreams.elfhosted.com").
+2. RICHER STREAM-PICKER INFO (size, codecs, runtime, seeders, languages, etc.)
+   When choosing between multiple stream results for a movie, each option now
+   shows the full metadata block providers like Torrentio/AIOStreams send —
+   file size, video/audio codec tags (BluRay/HEVC/DV/Atmos/TrueHD/7.1…),
+   bitrate, runtime, seeder count, age, source tracker, languages, and the
+   full filename/path — instead of just a single summary line.
 
-   NOTE: if you upgraded from an older version that had a fixed Torrentio/
-   AIOStreams dropdown, your prior choice was automatically migrated into
-   your provider list on first launch — check Settings to confirm/adjust it.
+3. FIXED: PROVIDERS THAT RESOLVE STREAMS SERVER-SIDE (e.g. AIOStreams) NOW WORK
+   Some providers — notably AIOStreams when you've linked your own Real-Debrid
+   account to it — don't hand back raw torrent hashes; they return a direct,
+   ready-to-play URL that they've already resolved through your debrid account.
+   The app's pipeline previously only understood raw torrent-hash results and
+   discarded everything else ("0 usable streams" even when dozens came back).
+   It now recognizes both kinds of results: torrent-hash streams are still
+   resolved through this app's own Real-Debrid connection as before, while
+   provider-resolved direct URLs are played immediately, with no extra step
+   (and without needing to share your Real-Debrid key with this app).
 
-3. MANAGING PROVIDERS
-   Each provider in your list shows its name and URL, with:
-     • An "enabled" checkbox — disable a provider without removing it.
-     • A "Remove" button.
-     • Drag-to-reorder — providers are queried top to bottom; the order is
-       your fallback priority (first provider's results show first).
-   When you tap Play on a movie/show, the app queries every ENABLED provider
-   in order, combines whatever streams come back, and lets you choose (or
-   auto-picks the best one, per the "When multiple stream results are found"
-   setting). If one provider is down or blocked, the others still work — you
-   just see fewer results, plus an error logged to the console for that source.
-
-4. OTHER CHANGES IN THIS BUILD
-   - VOD nav cleanup: the "VOD" tab no longer appears inside Live TV (use the
-     mode launcher / ⇄ switcher instead), the server selector and channel
-     search no longer appear while in VOD mode, and the Home / Movies / Shows
-     tabs now live in the top bar for VOD.
-   - Fixed the VOD spotlight banner being too dark/barely visible — backdrop
-     artwork now shows through clearly with a softer gradient overlay.
-   - Cloudflare-bypass activity (the hidden-window challenge solver) now logs
-     directly to the DevTools console with an orange "[netFetch]" prefix, so
-     you can see exactly what's happening when a source is blocked, instead of
-     only the launching terminal.
+4. CARRIED OVER FROM THE PREVIOUS BUILD
+   - No scraper is hardcoded — you choose your own providers in
+     Settings → Stream providers (single add or bulk "repository" import,
+     enable/disable, drag-to-reorder for fallback priority).
+   - VOD nav cleanup (Home/Movies/Shows tabs in the VOD top bar, no Live-TV
+     chrome while in VOD mode), fixed spotlight banner darkness, and
+     Cloudflare-bypass activity logs to DevTools with an orange "[netFetch]"
+     prefix.
 
 DEBUGGING "nothing happens" / playback errors
 ==============================================
 All VOD actions log to the DevTools console with a "[VOD]" prefix — card
 clicks, spotlight updates, provider queries (one line per provider, e.g.
-"[VOD] Querying provider: <name> <url>"), Real-Debrid calls, and any JSON-parse
+"[VOD] Querying provider: <name> <url>"), parsed-stream counts ("Parsed
+results with usable streams: N / M"), Real-Debrid calls, and any JSON-parse
 failures (which log the raw response so we can see what was actually returned,
 e.g. an HTML error/Cloudflare page instead of JSON). Cloudflare-bypass attempts
 show up as orange "[netFetch]" lines.
