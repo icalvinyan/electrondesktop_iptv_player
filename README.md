@@ -85,7 +85,7 @@ Inside the app:
 
 **A channel still doesn't play in the desktop app.** The red error panel at the bottom of the player will name the specific cause:
 
-- **`MEDIA_ERR_SRC_NOT_SUPPORTED` or "could not decode (HEVC)"** — the stream is H.265/HEVC. Chromium doesn't decode HEVC by default. There's no fix from inside the app; use VLC or IINA for that specific channel.
+- **HEVC/H.265 or AC-3 channels** — HEVC video plays directly on Macs with hardware HEVC decoding. Anything Chromium can't decode (AC-3/E-AC-3 audio, HEVC on unsupported hardware) is automatically re-encoded through the bundled ffmpeg; for AC-3 only the audio is converted, so this is cheap. If you still get "uses HEVC/H.265 video or AC-3 audio…", check the main-process log for ffmpeg errors (run `npm install` if ffmpeg-static is missing). Otherwise the stream may be offline, or the account may be at its connection limit.
 - **"manifest fetch failed"** — the IPTV server is unreachable from your network at the moment, or your account is at its concurrent-connection cap (close other devices/sessions and retry).
 - **Long stalls / repeated buffering** — the IPTV server is rate-limiting or your account is being shared. Click **Stop** in the player overlay to release the connection.
 

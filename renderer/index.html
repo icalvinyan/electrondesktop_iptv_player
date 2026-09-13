@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Xtream TV</title>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.19/dist/hls.min.js"></script>
 <!-- Cast SDK removed — native Node.js castv2 implementation used instead via IPC -->
 <style>
   :root {
@@ -126,6 +126,7 @@
   .server-form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px; }
   .server-form .full { grid-column: 1 / -1; }
   .row-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .row-actions button:focus-visible, .server-row .btn-star-sv:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .empty-state { color: var(--muted); text-align:center; padding:18px; border:1px dashed var(--line); border-radius: var(--radius); }
   .tab-row { display:flex; gap:6px; margin: 12px 0 6px; }
   .tab-row button { background:transparent; border-bottom:2px solid transparent; border-radius:0; padding:6px 10px; }
@@ -1971,6 +1972,38 @@
       const path = `/live/${encodeURIComponent(this.server.username)}/${encodeURIComponent(this.server.password)}/${stream.stream_id}.${ext}`;
       return this._wrap(joinUrl(this.server.host, path));
     }
+    // Requests a live stream URL and returns only its HTTP status, so callers
+    // can spot servers that authenticate fine but refuse playback (e.g. 456).
+    // Always asks for .m3u8 — a .ts URL is an endless body.
+    async probeStream(stream) {
+      const path = `/live/${encodeURIComponent(this.server.username)}/${encodeURIComponent(this.server.password)}/${stream.stream_id}.m3u8`;
+      const url = this._wrap(joinUrl(this.server.host, path));
+      if (window.xtream && window.xtream.isDesktop && window.xtream.fetch) {
+        // Main process stops at the headers and enforces the timeout.
+        const r = await window.xtream.fetch(url, { statusOnly: true });
+        return r.status;
+      }
+      // Abort as soon as the status line arrives: even if the panel redirects
+      // the .m3u8 to an endless .ts stream, nothing past the headers is read.
+      const TIMEOUT_MS = 10000;
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, TIMEOUT_MS);
+      try {
+        const r = await fetch(url, { signal: controller.signal, credentials:'omit' });
+        return r.status;
+      } catch (e) {
+        if (timedOut) {
+          const err = new Error(`Timed out after ${TIMEOUT_MS/1000}s`);
+          err.name = 'TimeoutError';
+          throw err;
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
+      }
+    }
     invalidateCache() {
       this._catCache = null;
       this._cacheAllStreams = null;
@@ -2134,6 +2167,29 @@
   }
 
   /* ---------- Player ---------- */
+  // Fatal errors meaning "Chromium can't decode this stream" (HEVC/H.265 video
+  // it has no decoder for, AC-3/E-AC-3 audio, …) rather than a network/auth
+  // problem. hls.js 1.6 demuxes HEVC-in-TS, so those usually surface at
+  // SourceBuffer time (buffer*Error); unsupported-codec demux failures surface
+  // as fragParsingError.
+  const CODEC_FAILURE_DETAILS = [
+    'fragparsingerror', 'bufferaddcodecerror', 'bufferincompatiblecodecserror',
+    'manifestincompatiblecodecserror', 'bufferappenderror', 'bufferappendingerror',
+    'media_err_decode', 'media_err_src_not_supported',
+  ];
+  function isCodecFailure(details) {
+    return CODEC_FAILURE_DETAILS.includes(String(details || '').toLowerCase());
+  }
+  function codecFailureMessage(triedTranscode) {
+    const base = 'this channel uses HEVC/H.265 video or AC-3 audio that the built-in player can\'t decode';
+    if (!(window.xtream && window.xtream.localTranscode)) {
+      return base + '. Try a different channel or contact your provider.';
+    }
+    return base + (triedTranscode
+      ? ', and the ffmpeg transcode fallback didn\'t produce playable output (the stream may be offline or refusing extra connections). Check the main-process log for ffmpeg errors.'
+      : ', and the ffmpeg transcode fallback couldn\'t start.');
+  }
+
   class Player {
     constructor(videoEl) {
       this.video = videoEl;
@@ -2143,6 +2199,8 @@
       this.onPlay = null;
       this.onLoading = null;
       this.onReady = null;
+      this._loadToken = 0;             // bumped on load()/stop() so stale async callbacks bail
+      this._transcodeActive = false;   // a local ffmpeg transcode belongs to this player
       this._listenersAttached = false;
       this._attach();
     }
@@ -2157,6 +2215,8 @@
         const codes = {1:'MEDIA_ERR_ABORTED',2:'MEDIA_ERR_NETWORK',3:'MEDIA_ERR_DECODE',4:'MEDIA_ERR_SRC_NOT_SUPPORTED'};
         const codeName = err && codes[err.code] || 'UNKNOWN';
         console.error('[video error]', err, this.currentSrc);
+        // Transcode starting: <video> is between sources until HLS.js attaches.
+        if (this._transcodeActive && !this.hls) return;
         // Auto-recover from MEDIA_ERR_SRC_NOT_SUPPORTED by reloading through HLS.js
         if (err && err.code === 4 && this.currentSrc && window.Hls && Hls.isSupported() && !this._triedHlsFallback) {
           this._triedHlsFallback = true;
@@ -2166,6 +2226,7 @@
           this._forceHls(u);
           return;
         }
+        if (isCodecFailure(codeName) && this._transcodeFallback({ details: codeName })) return;
         const reason = (err && err.message) || codeName;
         this._fail(this._explainNative(codeName, reason));
       });
@@ -2173,11 +2234,11 @@
     _explainNative(codeName, reason) {
       switch (codeName) {
         case 'MEDIA_ERR_SRC_NOT_SUPPORTED':
-          return 'the browser refused this stream (MEDIA_ERR_SRC_NOT_SUPPORTED). Usually means the codec is HEVC/H.265, or the response wasn\'t actually video. Try switching the container to HLS (m3u8) in Settings if you set it to TS.';
+          return codecFailureMessage(this._triedLocalTranscode) + ' (MEDIA_ERR_SRC_NOT_SUPPORTED — if you set the container to TS, also try HLS (m3u8) in Settings.)';
         case 'MEDIA_ERR_NETWORK':
           return 'network error while loading the stream (MEDIA_ERR_NETWORK). Often a CORS rejection on the segment files. Try a CORS proxy.';
         case 'MEDIA_ERR_DECODE':
-          return 'the browser could not decode the stream (MEDIA_ERR_DECODE). Codec mismatch.';
+          return codecFailureMessage(this._triedLocalTranscode) + ' (MEDIA_ERR_DECODE)';
         case 'MEDIA_ERR_ABORTED':
           return 'playback was aborted before it could start.';
         default:
@@ -2188,7 +2249,7 @@
       this._setLoading(true);
       try { this.video.removeAttribute('src'); this.video.load(); } catch(e){}
       this.currentSrc = url;
-      this.hls = new Hls(hlsConfig({ maxBufferLength: 30, enableWorker: true, lowLatencyMode: true }));
+      this.hls = new Hls(hlsConfig({ maxBufferLength: 30, enableWorker: true, lowLatencyMode: true, debug: this._hlsLogger() }));
       this.hls.loadSource(url);
       this.hls.attachMedia(this.video);
       this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
@@ -2200,8 +2261,62 @@
           httpCode: data.response && data.response.code,
         };
         console.error('[HLS fatal after fallback]', info);
+        if (isCodecFailure(data.details) && this._transcodeFallback(info)) return;
         this._fail(this._classify(info));
       });
+    }
+    // hls.js silently drops audio it can't play (e.g. AC-3, which Chromium's MSE
+    // lacks) and keeps playing video only — no error event. Its TS demuxer does
+    // log it via logger.log (worker logs are forwarded here), so hand hls.js a
+    // logger object that watches for that line once per load.
+    _hlsLogger() {
+      const tok = this._loadToken;
+      let reported = false;
+      const noop = () => {};
+      return {
+        log: (...args) => {
+          if (reported || this._loadToken !== tok) return;
+          const m = /(\S+) audio found, not supported in this browser/i.exec(args.join(' '));
+          if (!m) return;
+          reported = true;
+          console.warn('[HLS] dropped unsupported audio track:', m[1]);
+          // Defer: we're inside hls.js's demux/log path, and the fallback destroys it.
+          setTimeout(() => {
+            if (this._loadToken !== tok) return;
+            this._transcodeFallback({ details: 'unsupportedAudioCodec', codec: m[1] });
+          }, 0);
+        },
+        trace: noop, debug: noop, info: noop, warn: noop, error: noop,
+      };
+    }
+    // Hands the current channel to a local ffmpeg transcode (served as HLS by
+    // main.js) and plays that instead. Once per load. When only the audio was
+    // unsupported the video is already known to decode, so ffmpeg copies it and
+    // converts just the audio; otherwise it transcodes everything to H.264/AAC.
+    // Returns false if no fallback is possible (caller shows the error).
+    _transcodeFallback(info) {
+      if (this._triedLocalTranscode || !this.currentSrc) return false;
+      if (!(window.xtream && window.xtream.localTranscode)) return false;
+      this._triedLocalTranscode = true;
+      this._transcodeActive = true;
+      const url = this.currentSrc;
+      const tok = this._loadToken;
+      const copyVideo = info.details === 'unsupportedAudioCodec';
+      console.warn('[Player] codec failure (' + info.details + (info.codec ? ' ' + info.codec : '') +
+                   ') → local ffmpeg transcode' + (copyVideo ? ' (audio only)' : ''));
+      this._setLoading(true);
+      if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
+      try { this.video.removeAttribute('src'); this.video.load(); } catch(e){}
+      window.xtream.localTranscode(url, { copyVideo }).then(transcodeUrl => {
+        if (this._loadToken !== tok) return;
+        if (!transcodeUrl) { this._fail(codecFailureMessage(false)); return; }
+        console.log('[Player] local transcode started:', transcodeUrl);
+        this._loadTranscoded(transcodeUrl);
+      }).catch(e => {
+        if (this._loadToken !== tok) return;
+        this._fail(codecFailureMessage(false) + ' (' + e.message + ')');
+      });
+      return true;
     }
     _setLoading(b) { this.onLoading && this.onLoading(b); }
     _fail(msg) { this._setLoading(false); this.onError && this.onError(msg); }
@@ -2212,8 +2327,15 @@
     pause() { this.video.pause(); }
     stop() {
       this.currentSrc = null;
+      this._loadToken++; // invalidate pending transcode/logger callbacks
       if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
       try { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); } catch(e){}
+      this._stopTranscode();
+    }
+    _stopTranscode() {
+      if (!this._transcodeActive) return;
+      this._transcodeActive = false;
+      if (window.xtream && window.xtream.localTranscodeStop) window.xtream.localTranscodeStop();
     }
     isPlaying() { return !this.video.paused; }
     setVolume(v) { this.video.volume = clamp(v, 0, 1); }
@@ -2224,6 +2346,7 @@
         return;
       }
       this.currentSrc = url;
+      this._loadToken++;
       this._triedHlsFallback = false;
       this._triedLocalTranscode = false;
       this._setLoading(true);
@@ -2232,6 +2355,8 @@
         try { this.hls.destroy(); } catch (e){}
         this.hls = null;
       }
+      // Don't leave the previous channel's ffmpeg holding a connection slot.
+      this._stopTranscode();
       this.video.removeAttribute('src');
       this.video.load();
 
@@ -2250,6 +2375,7 @@
           // on IPTV servers with tight per-IP rate limits.
           startLevel: 0,
           abrEwmaDefaultEstimate: 500000,
+          debug: this._hlsLogger(),
         }));
         this.hls.loadSource(url);
         this.hls.attachMedia(this.video);
@@ -2267,6 +2393,9 @@
             httpText: data.response && data.response.text,
           };
           console.error('[HLS fatal]', JSON.stringify(info));
+          // Codec failures never recover — skip the recoverMediaError() retries
+          // and go straight to the ffmpeg transcode.
+          if (isCodecFailure(data.details) && this._transcodeFallback(info)) return;
           // Never retry auth/permission errors — startLoad() won't fix a 403 or 401.
           const isAuthError = info.httpCode === 403 || info.httpCode === 401;
           if (recoveryTries <= 2 && !isAuthError) {
@@ -2278,20 +2407,6 @@
                 try { this.hls.recoverMediaError(); } catch(e){}
                 return;
             }
-          }
-          // fragParsingError on desktop = almost certainly HEVC/M2TS.
-          // Auto-transcode via ffmpeg and reload HLS.js with the H.264 output.
-          if ((info.details || '').toLowerCase().includes('fragparsingerror') &&
-              !this._triedLocalTranscode && window.xtream && window.xtream.localTranscode) {
-            this._triedLocalTranscode = true;
-            this._setLoading(true);
-            if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
-            window.xtream.localTranscode(url).then(transcodeUrl => {
-              if (!transcodeUrl) { this._fail('HEVC transcode failed — ffmpeg not found.'); return; }
-              console.log('[HLS] fragParsingError → local transcode started:', transcodeUrl);
-              this._loadTranscoded(transcodeUrl);
-            }).catch(e => this._fail('HEVC transcode error: ' + e.message));
-            return;
           }
           this._fail(this._classify(info));
         });
@@ -2306,7 +2421,9 @@
       if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
       this._setLoading(true);
       // Wait up to 4s for ffmpeg to produce its first segment before attaching HLS.js
+      const tok = this._loadToken;
       const attach = () => {
+        if (this._loadToken !== tok) return; // channel changed/stopped meanwhile
         this.hls = new Hls(hlsConfig({ maxBufferLength: 30, enableWorker: true, lowLatencyMode: true }));
         this.hls.loadSource(transcodeUrl);
         this.hls.attachMedia(this.video);
@@ -2314,17 +2431,12 @@
         this.hls.on(Hls.Events.ERROR, (_, data) => {
           if (!data.fatal) return;
           console.error('[LocalTranscode HLS error]', data.details);
-          this._fail('Transcode playback error: ' + data.details);
+          if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
+          this._stopTranscode(); // free the provider connection ffmpeg holds
+          this._fail(codecFailureMessage(true) + ' (' + data.details + ')');
         });
       };
       setTimeout(attach, 4000);
-    }
-    stop() {
-      try { this.video.pause(); } catch(e){}
-      if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
-      this.video.removeAttribute('src'); this.video.load();
-      this.currentSrc = null;
-      if (window.xtream && window.xtream.localTranscodeStop) window.xtream.localTranscodeStop();
     }
     _classify(info) {
       const d = (info.details || '').toLowerCase();
@@ -2376,11 +2488,8 @@
         if (info.httpCode === 401) return 'segment fetch failed (HTTP 401 Unauthorized). Your credentials may be wrong or the session expired — reconnect from the server picker.';
         return 'segment fetch failed (' + (info.httpCode || 'no response') + '). The manifest loaded but the .ts segments are blocked. Try again, switch channels, or check your account status.';
       }
-      if (d.includes('fragparsingerror')) {
-        return 'stream parsing failed — this channel is likely HEVC/H.265 encoded in M2TS. The app tried to auto-transcode it but was unable to start ffmpeg. Use the \u{1F4FA} Cast button to play it on your Chromecast instead.';
-      }
-      if (d.includes('bufferappenderror') || d.includes('bufferappendingerror') || d.includes('audiotrack')) {
-        return 'the browser could not decode this stream. Usually H.265/HEVC video or AC-3 audio, which Chrome/Edge will not play. Try a different channel; if all channels fail this way, your provider only serves HEVC.';
+      if (isCodecFailure(d) || d.includes('audiotrack')) {
+        return codecFailureMessage(this._triedLocalTranscode);
       }
       if (d.includes('mediaerror')) {
         return 'media decode error (codec). Stream URL is fine but the browser cannot decode it.';
@@ -2460,6 +2569,16 @@
   // Cache: serverId → {user_info, server_info} fetched this session
   const _serverMetaCache = {};
 
+  // Playlist URL for a saved profile: the imported URL for M3U, or the
+  // standard Xtream get.php subscription URL (round-trips via Bulk Import).
+  function serverM3uUrl(s) {
+    if (s.type === 'm3u') return String(s.host || '').trim();
+    const host = String(s.host || '').trim().replace(/[\/\s]+$/, '');
+    const enc = encodeURIComponent;
+    const output = s.container === 'ts' ? 'ts' : 'm3u8';
+    return `${host}/get.php?username=${enc(s.username || '')}&password=${enc(s.password || '')}&type=m3u_plus&output=${output}`;
+  }
+
   function renderServerList() {
     const wrap = $('#server-list');
     const filterEl = $('#sv-filter');
@@ -2498,6 +2617,7 @@
         <div class="row-actions">
           <button class="primary" data-act="connect" data-id="${s.id}">Connect</button>
           ${s.type === 'm3u' ? '' : '<button data-act="edit" data-id="' + s.id + '">Edit</button>'}
+          <button data-act="copy" data-id="${s.id}" title="Copy M3U URL">Copy URL</button>
           <button class="danger" data-act="del" data-id="${s.id}">Delete</button>
         </div>`;
       wrap.appendChild(row);
@@ -2624,6 +2744,8 @@
       $('#f-container').value = s.container || 'm3u8';
       $('#f-proxy').value = s.proxy || '';
       $('#f-save').dataset.editing = id;
+    } else if (btn.dataset.act === 'copy') {
+      copyText(serverM3uUrl(s), 'Copied M3U URL.');
     } else if (btn.dataset.act === 'star') {
       Storage.toggleServerFavorite(id);
       renderServerList();
@@ -2824,22 +2946,24 @@
               rowStates[i].status = 'fail';
               rowStates[i].info = '✗ Expired ' + expDate.toLocaleDateString();
             } else {
-              rowStates[i].status = 'ok';
-              const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
-              rowStates[i].info = '✓ Valid' + (u.status ? ' · ' + u.status : '') + expLabel;
-              // fetch channel count in background
-              (async (idx) => {
-                try {
-                  const streams = await api.allLiveStreams();
-                  rowStates[idx].channelCount = streams.length;
-                  updateRow(idx);
-                } catch (_) {}
-              })(i);
+              rowStates[i].info = 'Checking streams…';
+              updateRow(i);
+              const check = await checkStreams(api, i);
+              if (check.refused) {
+                rowStates[i].status = 'fail';
+                rowStates[i].info = '✗ HTTP 456 — server refuses streams';
+              } else {
+                rowStates[i].status = 'ok';
+                const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
+                rowStates[i].info = '✓ Valid' + (u.status ? ' · ' + u.status : '') + expLabel + check.note;
+              }
             }
             rowStates[i].server = { ...parsedRows[i] };
           } catch(e) {
             rowStates[i].status = 'fail';
-            rowStates[i].info = '✗ ' + (e.message || 'Connection failed');
+            rowStates[i].info = e.message === 'HTTP 456'
+              ? '✗ HTTP 456 — server refuses this account'
+              : '✗ ' + (e.message || 'Connection failed');
           }
           updateRow(i);
           updateSummary();
@@ -2853,6 +2977,37 @@
       rowStates.forEach(st => { if (st.status === 'ok') st.checked = true; });
       toolbar.classList.remove('hidden');
       renderBulkResults();
+    }
+
+    // Some servers pass player_api.php auth but answer every stream request
+    // with HTTP 456. Probe up to three distinct channels (first/middle/last)
+    // and stop at the first decisive answer: 456 → refused, 2xx/3xx → fine.
+    // Anything else (dead channel 404, max-connections 403/458…) is shown as
+    // a note but doesn't fail the row.
+    async function checkStreams(api, i) {
+      let streams;
+      try {
+        streams = await api.allLiveStreams();
+        rowStates[i].channelCount = streams.length;
+      } catch (_) {
+        return { refused: false, note: ' · stream check skipped' };
+      }
+      if (!streams.length) return { refused: false, note: ' · stream check skipped' };
+
+      const picks = new Map();
+      for (const s of [streams[0], streams[Math.floor(streams.length / 2)], streams[streams.length - 1]]) {
+        if (s && s.stream_id != null) picks.set(String(s.stream_id), s);
+      }
+      let lastStatus = null;
+      for (const s of picks.values()) {
+        let status;
+        try { status = await api.probeStream(s); }
+        catch (_) { continue; }
+        if (status === 456) return { refused: true, note: '' };
+        if (status >= 200 && status < 400) return { refused: false, note: '' };
+        lastStatus = status;
+      }
+      return { refused: false, note: lastStatus != null ? ' · stream check: HTTP ' + lastStatus : ' · stream check skipped' };
     }
 
     // ---- sort/filter toolbar ----
@@ -5585,6 +5740,12 @@
     const savedOpacity = Storage.settings().overlayOpacity;
     if (savedOpacity != null) applyOverlayOpacity(savedOpacity);
     // Player init
+    // Log what Chromium can decode — decides whether HEVC/AC-3 channels need the ffmpeg transcode.
+    if (window.MediaSource && MediaSource.isTypeSupported) {
+      console.log('[codecs] MSE hevc=' + MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L153.B0"') +
+                  ' ac-3=' + MediaSource.isTypeSupported('audio/mp4; codecs="ac-3"') +
+                  ' hls.js=' + (window.Hls && Hls.version));
+    }
     State.player = new Player($('#video'));
     State.preview = new PreviewPlayer($('#preview-video'));
     State.multi = new MultiView($('#multi-grid'));
