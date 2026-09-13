@@ -2926,8 +2926,12 @@
       btnSave.disabled = true;
       updateSummary();
 
-      // validate concurrently, up to 4 at a time
-      const CONCURRENCY = 4;
+      // Validate a couple at a time. Each row downloads the panel's full
+      // channel list (multi-MB) and probes streams; most Xtream panels cap
+      // concurrent connections (this one at 1), so fanning out too wide makes
+      // the list fetch fail and rows show "stream check skipped". 2 keeps
+      // throughput up without tripping the cap on every request.
+      const CONCURRENCY = 2;
       let idx = 0;
       async function worker() {
         while (idx < parsedRows.length) {
@@ -2952,6 +2956,9 @@
               if (check.refused) {
                 rowStates[i].status = 'fail';
                 rowStates[i].info = '✗ HTTP 456 — server refuses streams';
+              } else if (check.unreachable) {
+                rowStates[i].status = 'fail';
+                rowStates[i].info = '✗ Streams unreachable — ' + check.unreachable;
               } else {
                 rowStates[i].status = 'ok';
                 const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
@@ -2983,31 +2990,48 @@
     // with HTTP 456. Probe up to three distinct channels (first/middle/last)
     // and stop at the first decisive answer: 456 → refused, 2xx/3xx → fine.
     // Anything else (dead channel 404, max-connections 403/458…) is shown as
-    // a note but doesn't fail the row.
+    // a note but doesn't fail the row. If none of them answer at all, the
+    // row fails as unreachable.
     async function checkStreams(api, i) {
       let streams;
-      try {
-        streams = await api.allLiveStreams();
-        rowStates[i].channelCount = streams.length;
-      } catch (_) {
-        return { refused: false, note: ' · stream check skipped' };
+      // The channel list is a multi-MB download and this panel allows only one
+      // connection, so under load the fetch can transiently fail (reset/429/
+      // timeout). Retry a few times with backoff before giving up as skipped —
+      // otherwise a working account looks like "stream check skipped".
+      let lastListErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt) await new Promise(r => setTimeout(r, 800 * attempt));
+        try { streams = await api.allLiveStreams(); break; }
+        catch (e) { lastListErr = e; }
       }
-      if (!streams.length) return { refused: false, note: ' · stream check skipped' };
+      if (!streams) {
+        const msg = String((lastListErr && lastListErr.message) || lastListErr || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+        return { refused: false, note: ' · stream check skipped' + (msg ? ' (' + msg + ')' : '') };
+      }
+      rowStates[i].channelCount = streams.length;
+      if (!streams.length) return { refused: false, note: ' · stream check skipped (no channels)' };
 
       const picks = new Map();
       for (const s of [streams[0], streams[Math.floor(streams.length / 2)], streams[streams.length - 1]]) {
         if (s && s.stream_id != null) picks.set(String(s.stream_id), s);
       }
-      let lastStatus = null;
+      let lastStatus = null, lastError = null;
       for (const s of picks.values()) {
         let status;
         try { status = await api.probeStream(s); }
-        catch (_) { continue; }
+        catch (e) { lastError = e; continue; }
         if (status === 456) return { refused: true, note: '' };
         if (status >= 200 && status < 400) return { refused: false, note: '' };
         lastStatus = status;
       }
-      return { refused: false, note: lastStatus != null ? ' · stream check: HTTP ' + lastStatus : ' · stream check skipped' };
+      if (lastStatus != null) return { refused: false, note: ' · stream check: HTTP ' + lastStatus };
+      // No channel answered at all (TLS/DNS/connection error or timeout):
+      // the player would hit the same wall, so don't report the row as valid.
+      if (lastError) {
+        const msg = String(lastError.message || lastError).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+        return { refused: false, unreachable: msg };
+      }
+      return { refused: false, note: ' · stream check skipped' };
     }
 
     // ---- sort/filter toolbar ----

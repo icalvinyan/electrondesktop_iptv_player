@@ -87,6 +87,7 @@ Inside the app:
 
 - **HEVC/H.265 or AC-3 channels** — HEVC video plays directly on Macs with hardware HEVC decoding. Anything Chromium can't decode (AC-3/E-AC-3 audio, HEVC on unsupported hardware) is automatically re-encoded through the bundled ffmpeg; for AC-3 only the audio is converted, so this is cheap. If you still get "uses HEVC/H.265 video or AC-3 audio…", check the main-process log for ffmpeg errors (run `npm install` if ffmpeg-static is missing). Otherwise the stream may be offline, or the account may be at its connection limit.
 - **"manifest fetch failed"** — the IPTV server is unreachable from your network at the moment, or your account is at its concurrent-connection cap (close other devices/sessions and retry).
+- **Bulk Import says "✗ Streams unreachable"** — the account logs in, but none of the probed channels could be reached (connection refused, TLS or DNS error, or no answer within 10 s). The player would fail the same way, so the row isn't counted as valid.
 - **Long stalls / repeated buffering** — the IPTV server is rate-limiting or your account is being shared. Click **Stop** in the player overlay to release the connection.
 
 **Chromecast button is greyed out.** Electron doesn't ship Chrome's Cast SDK in the same way regular Chrome does. The Cast button is best-effort here — for serious casting use the browser version on Chrome desktop instead, or run a separate Chromecast sender like [Cast All The Things](https://catt.readthedocs.io/).
