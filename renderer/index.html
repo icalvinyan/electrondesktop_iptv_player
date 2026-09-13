@@ -1975,9 +1975,14 @@
     // Requests a live stream URL and returns only its HTTP status, so callers
     // can spot servers that authenticate fine but refuse playback (e.g. 456).
     // Always asks for .m3u8 — a .ts URL is an endless body.
-    async probeStream(stream) {
+    _probeUrl(stream) {
       const path = `/live/${encodeURIComponent(this.server.username)}/${encodeURIComponent(this.server.password)}/${stream.stream_id}.m3u8`;
-      const url = this._wrap(joinUrl(this.server.host, path));
+      return this._wrap(joinUrl(this.server.host, path));
+    }
+    // Checks the channel's first segment server actually answers (see probeFirstSegment).
+    probeSegment(stream) { return probeFirstSegment(this._probeUrl(stream)); }
+    async probeStream(stream) {
+      const url = this._probeUrl(stream);
       if (window.xtream && window.xtream.isDesktop && window.xtream.fetch) {
         // Main process stops at the headers and enforces the timeout.
         const r = await window.xtream.fetch(url, { statusOnly: true });
@@ -2189,6 +2194,86 @@
       ? ', and the ffmpeg transcode fallback didn\'t produce playable output (the stream may be offline or refusing extra connections). Check the main-process log for ffmpeg errors.'
       : ', and the ffmpeg transcode fallback couldn\'t start.');
   }
+  // host:port of a URL, or '' — never throws (hls.js can hand us odd URLs on failure).
+  function safeHost(u) {
+    if (!u) return '';
+    try { return new URL(u, location.href).host; } catch (e) { return ''; }
+  }
+  // Pulls "net::ERR_…" out of a rejected window.xtream.fetch (IPC prefixes the
+  // message with "Error invoking remote method…"); netFetch's own timeout maps
+  // to a connection timeout.
+  function netErrorCode(err) {
+    const m = String((err && err.message) || err || '');
+    const code = /net::ERR_[A-Z_]+/.exec(m);
+    if (code) return code[0];
+    return /timed out/i.test(m) ? 'net::ERR_CONNECTION_TIMED_OUT' : '';
+  }
+  // A playlist that loaded but whose segment server can't be reached at all —
+  // a provider-side outage or IP block, not something the app or account can fix.
+  function unreachableMessage(pageHost, segHost, netError) {
+    const code = String(netError || '').replace(/^net::/, '');
+    if (code === 'ERR_INTERNET_DISCONNECTED' || code === 'ERR_NETWORK_CHANGED') {
+      return 'no internet connection (' + netError + ') — check your network and retry.';
+    }
+    const verb = code === 'ERR_CONNECTION_REFUSED' ? 'refused the connection'
+      : (code === 'ERR_CONNECTION_TIMED_OUT' || code === 'ERR_TIMED_OUT') ? 'didn\'t respond'
+      : code === 'ERR_NAME_NOT_RESOLVED' ? 'couldn\'t be found (DNS lookup failed)'
+      : 'couldn\'t be reached';
+    const sameHost = segHost && segHost === pageHost;
+    const server = sameHost ? 'the stream server (' + segHost + ')'
+      : segHost ? 'the video server it points to (' + segHost + ')'
+      : 'the video server it points to';
+    const from = pageHost && !sameHost ? 'the playlist from ' + pageHost + ' loaded, but ' : 'the playlist loaded, but ';
+    return 'stream server unreachable — ' + from + server + ' ' + verb +
+      (netError ? ' (' + netError + ')' : '') +
+      '. This is a provider-side outage or an IP block, not your account or this app. ' +
+      'Try again later, try from another network/VPN, or contact your provider.';
+  }
+  // Network errors that mean the server won't answer at all — safe to stop
+  // retrying on and to reject a server for at import time.
+  const UNREACHABLE_NET_ERRORS = new Set([
+    'net::ERR_CONNECTION_REFUSED', 'net::ERR_NAME_NOT_RESOLVED',
+    'net::ERR_ADDRESS_UNREACHABLE', 'net::ERR_CONNECTION_TIMED_OUT',
+  ]);
+  // Follows a live .m3u8 (plus one master→variant hop) to its first media
+  // segment and checks that the segment's server answers. Catches panels whose
+  // playlist loads fine but points at a dead stream server — which otherwise
+  // only shows up as endless buffering. Desktop only (needs the main-process
+  // fetch to read past CORS and cap the body). Never throws.
+  // → { verdict: 'ok' | 'unreachable' | 'http' | 'inconclusive', segmentUrl, netError, status }
+  async function probeFirstSegment(manifestUrl) {
+    if (!(window.xtream && window.xtream.fetch)) return { verdict: 'inconclusive' };
+    const get = (u) => window.xtream.fetch(u, { maxBytes: 65536, timeoutMs: 8000 });
+    const firstUri = (text) => text.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith('#'));
+    const resolve = (u, base) => { try { return new URL(u, base).href; } catch (e) { return ''; } };
+    try {
+      let reqUrl = manifestUrl;
+      let r = await get(reqUrl);
+      for (let hop = 0; hop < 2; hop++) {
+        if (!r.ok) return { verdict: 'inconclusive', status: r.status };
+        const body = r.body || '';
+        // Redirected straight to a media stream (MPEG-TS sync byte) — bytes are flowing.
+        if (body.charCodeAt(0) === 0x47) return { verdict: 'ok' };
+        if (!/^\s*#EXTM3U/.test(body)) return { verdict: 'inconclusive' };
+        // r.url is the post-redirect URL — relative paths resolve against it.
+        const uri = resolve(firstUri(body) || '', r.url || reqUrl);
+        if (!uri) return { verdict: 'inconclusive' };
+        if (/#EXT-X-STREAM-INF/.test(body)) { reqUrl = uri; r = await get(uri); continue; } // master → variant
+        try {
+          const s = await window.xtream.fetch(uri, { statusOnly: true, timeoutMs: 5000 });
+          return s.ok ? { verdict: 'ok', segmentUrl: uri }
+                      : { verdict: 'http', status: s.status, segmentUrl: uri };
+        } catch (e) {
+          const netError = netErrorCode(e);
+          return { verdict: UNREACHABLE_NET_ERRORS.has(netError) ? 'unreachable' : 'inconclusive',
+                   netError, segmentUrl: uri };
+        }
+      }
+      return { verdict: 'inconclusive' };
+    } catch (e) {
+      return { verdict: 'inconclusive' };
+    }
+  }
 
   class Player {
     constructor(videoEl) {
@@ -2249,12 +2334,13 @@
       this._setLoading(true);
       try { this.video.removeAttribute('src'); this.video.load(); } catch(e){}
       this.currentSrc = url;
+      this._earlyProbed = false;
       this.hls = new Hls(hlsConfig({ maxBufferLength: 30, enableWorker: true, lowLatencyMode: true, debug: this._hlsLogger() }));
       this.hls.loadSource(url);
       this.hls.attachMedia(this.video);
       this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
       this.hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return;
+        if (!data.fatal) { this._earlyProbe(data, url); return; }
         const info = {
           type: data.type, details: data.details,
           url: (data.frag && data.frag.url) || (data.context && data.context.url) || url,
@@ -2262,7 +2348,7 @@
         };
         console.error('[HLS fatal after fallback]', info);
         if (isCodecFailure(data.details) && this._transcodeFallback(info)) return;
-        this._fail(this._classify(info));
+        this._diagnoseAndFail(info, data);
       });
     }
     // hls.js silently drops audio it can't play (e.g. AC-3, which Chromium's MSE
@@ -2319,7 +2405,68 @@
       return true;
     }
     _setLoading(b) { this.onLoading && this.onLoading(b); }
-    _fail(msg) { this._setLoading(false); this.onError && this.onError(msg); }
+    _fail(msg, meta = {}) { this._failed = true; this._setLoading(false); this.onError && this.onError(msg, meta); }
+    // Final step for fatal hls.js errors. A fragment that failed with no HTTP
+    // response gets a quick status probe first, so the message can name the real
+    // network error (refused, DNS, timeout) instead of "no response".
+    // early: called on a non-fatal failure — only fails (and stops hls.js) when
+    // the probe shows the server is definitively unreachable; otherwise hls.js
+    // keeps retrying and the fatal path runs later as usual.
+    async _diagnoseAndFail(info, data, { early = false } = {}) {
+      const tok = this._loadToken;
+      const meta = { segmentUrl: info.url, variant: this._variantLabel(data) };
+      const probe = !info.httpCode && /fragloaderror/i.test(info.details || '') &&
+                    window.xtream && window.xtream.fetch;
+      if (probe) {
+        try {
+          const r = await window.xtream.fetch(info.url, { statusOnly: true, timeoutMs: 4000 });
+          if (r && !r.ok && r.status) info.httpCode = r.status; // reuse the 401/403/404 messages
+          else info.probeOk = true;                              // reachable now — transient failure
+        } catch (e) {
+          info.netError = netErrorCode(e);
+        }
+        if (this._loadToken !== tok) return; // channel changed/stopped during the probe
+        console.warn('[HLS] segment probe' + (early ? ' (early)' : '') + ':',
+                     info.netError || info.httpCode || 'reachable', info.url);
+      }
+      if (early) {
+        if (!UNREACHABLE_NET_ERRORS.has(info.netError)) return;
+        this._loadToken++; // drop any late callbacks from this load
+        if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
+      }
+      const msg = this._classify(info);
+      meta.netError = info.netError || '';
+      meta.hideCorsProxies = !!info.unreachable;
+      this._fail(msg, meta);
+    }
+    // hls.js retries a failing fragment for ~38s before going fatal, and load()'s
+    // handler then restarts it twice more — ~2 min of spinner for a server that
+    // refused the very first connection. Probe once on the first no-response
+    // fragment failure and bail straight to the error if it's unreachable.
+    _earlyProbe(data, url) {
+      if (this._earlyProbed || String(data.details).toLowerCase() !== 'fragloaderror') return;
+      if (data.response && data.response.code) return;
+      if (!(window.xtream && window.xtream.fetch)) return;
+      this._earlyProbed = true;
+      this._diagnoseAndFail({
+        type: data.type, details: data.details,
+        url: (data.frag && data.frag.url) || url,
+      }, data, { early: true });
+    }
+    // "level 2, 1280x720, 3.2 Mbps" for the variant a fragment belonged to — only
+    // meaningful when the stream has several quality levels.
+    _variantLabel(data) {
+      try {
+        const lvl = data && data.frag && data.frag.level;
+        const levels = (this.hls && this.hls.levels) || [];
+        const L = levels[lvl];
+        if (lvl == null || !L || levels.length < 2) return '';
+        const parts = ['level ' + lvl];
+        if (L.width && L.height) parts.push(L.width + 'x' + L.height);
+        if (L.bitrate) parts.push((L.bitrate / 1e6).toFixed(1) + ' Mbps');
+        return parts.join(', ');
+      } catch (e) { return ''; }
+    }
     play() {
       const p = this.video.play();
       if (p && typeof p.catch === 'function') p.catch(() => {/* autoplay block */});
@@ -2341,14 +2488,17 @@
     setVolume(v) { this.video.volume = clamp(v, 0, 1); }
     setMuted(b) { this.video.muted = !!b; }
     load(url) {
-      if (this.currentSrc === url) {
+      // Same channel again just resumes — unless it failed, where this is a Retry.
+      if (this.currentSrc === url && !this._failed) {
         this.play();
         return;
       }
       this.currentSrc = url;
+      this._failed = false;
       this._loadToken++;
       this._triedHlsFallback = false;
       this._triedLocalTranscode = false;
+      this._earlyProbed = false;
       this._setLoading(true);
       // Clean up
       if (this.hls) {
@@ -2381,7 +2531,7 @@
         this.hls.attachMedia(this.video);
         let recoveryTries = 0;
         this.hls.on(Hls.Events.ERROR, (_, data) => {
-          if (!data.fatal) return;
+          if (!data.fatal) { this._earlyProbe(data, url); return; }
           recoveryTries++;
           // Surface diagnostic information about the failure
           const info = {
@@ -2408,7 +2558,7 @@
                 return;
             }
           }
-          this._fail(this._classify(info));
+          this._diagnoseAndFail(info, data);
         });
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
       } else {
@@ -2477,6 +2627,14 @@
         return 'manifest fetch failed (' + (info.httpCode || 'no response') + '). Could not load the stream playlist.';
       }
       if (d.includes('fragloaderror') || d.includes('keyloaderror')) {
+        // No HTTP response at all: either the probe named a network error, or
+        // (no probe possible) the segments live on a different host than the playlist.
+        const segHost = safeHost(info.url), pageHost = safeHost(this.currentSrc);
+        if (!info.httpCode && !info.probeOk &&
+            (info.netError || (segHost && pageHost && segHost !== pageHost))) {
+          info.unreachable = true;
+          return unreachableMessage(pageHost, segHost, info.netError);
+        }
         if (info.httpCode === 403) {
           return 'segment fetch failed (HTTP 403 Forbidden). The IPTV provider rejected your request for the .ts segments. Most common causes, in order:\n' +
             '  1. Concurrent-connection cap — close every other device/app/browser tab using this account, then retry.\n' +
@@ -2959,6 +3117,12 @@
               } else if (check.unreachable) {
                 rowStates[i].status = 'fail';
                 rowStates[i].info = '✗ Streams unreachable — ' + check.unreachable;
+              } else if (check.segmentUnreachable) {
+                const seg = check.segmentUnreachable;
+                rowStates[i].status = 'fail';
+                rowStates[i].info = '✗ Stream server unreachable — playlists load but ' +
+                  (safeHost(seg.segmentUrl) || 'the video server') + ' won\'t connect' +
+                  (seg.netError ? ' (' + seg.netError.replace(/^net::/, '') + ')' : '');
               } else {
                 rowStates[i].status = 'ok';
                 const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
@@ -2989,9 +3153,14 @@
     // Some servers pass player_api.php auth but answer every stream request
     // with HTTP 456. Probe up to three distinct channels (first/middle/last)
     // and stop at the first decisive answer: 456 → refused, 2xx/3xx → fine.
+    // A 2xx playlist is then followed to its first segment: if that segment's
+    // server is unreachable (connection refused, DNS, timeout) the channel
+    // counts as dead and the next pick is tried; when every playlist that
+    // loaded points at an unreachable server, the row fails — the classic
+    // "playlist loads, video buffers forever" provider outage.
     // Anything else (dead channel 404, max-connections 403/458…) is shown as
-    // a note but doesn't fail the row. If none of them answer at all, the
-    // row fails as unreachable.
+    // a note but doesn't fail the row. If none of the playlists answer at all,
+    // the row fails as unreachable.
     async function checkStreams(api, i) {
       let streams;
       // The channel list is a multi-MB download and this panel allows only one
@@ -3015,15 +3184,24 @@
       for (const s of [streams[0], streams[Math.floor(streams.length / 2)], streams[streams.length - 1]]) {
         if (s && s.stream_id != null) picks.set(String(s.stream_id), s);
       }
-      let lastStatus = null, lastError = null;
+      let lastStatus = null, lastError = null, segmentUnreachable = null;
       for (const s of picks.values()) {
         let status;
         try { status = await api.probeStream(s); }
         catch (e) { lastError = e; continue; }
         if (status === 456) return { refused: true, note: '' };
-        if (status >= 200 && status < 400) return { refused: false, note: '' };
+        if (status >= 200 && status < 400) {
+          rowStates[i].info = 'Checking stream server…';
+          updateRow(i);
+          const seg = await api.probeSegment(s);
+          if (seg.verdict === 'unreachable') { segmentUnreachable = seg; continue; }
+          return { refused: false, note: seg.verdict === 'http' ? ' · segment check: HTTP ' + seg.status : '' };
+        }
         lastStatus = status;
       }
+      // A playlist that loaded but points at a dead segment server is the most
+      // decisive answer — the player would buffer forever on it.
+      if (segmentUnreachable) return { refused: false, segmentUnreachable, note: '' };
       if (lastStatus != null) return { refused: false, note: ' · stream check: HTTP ' + lastStatus };
       // No channel answered at all (TLS/DNS/connection error or timeout):
       // the player would hit the same wall, so don't report the row as valid.
@@ -3785,9 +3963,11 @@
     $('#player-loading').classList.toggle('show', !!b);
     if (msg) $('#loading-msg').textContent = msg;
   }
-  function showStreamError(msg) {
+  // meta (from Player._fail): { segmentUrl, variant, netError, hideCorsProxies }
+  function showStreamError(msg, meta = {}) {
     const url = State.player && State.player.currentSrc ? State.player.currentSrc : '';
     const text = String(msg || 'Unknown error.');
+    State.lastStreamErrorMeta = meta;
     $('#stream-error-msg').textContent = text;
     const a = $('#stream-error-url');
     a.textContent = url || '(no URL)';
@@ -3796,7 +3976,9 @@
     const actions = $('#stream-error-actions');
     actions.innerHTML = '';
     const lc = text.toLowerCase();
-    const looksLikeCors = lc.includes('cors') || lc.includes('manifest fetch failed') || lc.includes('segment fetch failed') || lc.includes('mixed-content');
+    // An unreachable server isn't a CORS problem — and the public proxies would
+    // just receive the user's credentials — so the classifier can opt out explicitly.
+    const looksLikeCors = !meta.hideCorsProxies && (lc.includes('cors') || lc.includes('manifest fetch failed') || lc.includes('segment fetch failed') || lc.includes('mixed-content'));
     if (looksLikeCors) {
       actions.appendChild(makeQuickAction('Retry with corsproxy.io', () => applyProxyAndRetry('https://corsproxy.io/?')));
       actions.appendChild(makeQuickAction('Retry with allorigins',     () => applyProxyAndRetry('https://api.allorigins.win/raw?url=')));
@@ -3827,6 +4009,7 @@
   function hideStreamError() {
     const el = $('#stream-error');
     if (el) el.style.display = 'none';
+    State.lastStreamErrorMeta = null;
   }
 
   function showApp() {
@@ -5778,9 +5961,9 @@
       window.xtream.onCastLog(msg => console.log('%c[Cast]', 'color:#7ab4ff', msg));
     }
     State.player.onLoading = (b) => setLoading(b, 'Buffering…');
-    State.player.onError = (msg) => {
+    State.player.onError = (msg, meta) => {
       setLoading(false);
-      showStreamError(msg);
+      showStreamError(msg, meta);
       if (Storage.settings().autonext === 'on' && State.view === 'player') {
         const n = neighborChannel(1); if (n) playChannel(n);
       }
@@ -5795,7 +5978,13 @@
       const msg = $('#stream-error-msg').textContent;
       const url = $('#stream-error-url').href;
       const ua = navigator.userAgent;
-      const blob = `Xtream TV — stream error\n----\n${msg}\n\nStream URL: ${url}\nUser-Agent: ${ua}\nPage origin: ${location.origin || location.protocol}`;
+      const meta = State.lastStreamErrorMeta || {};
+      const extra = [
+        meta.segmentUrl && meta.segmentUrl !== url ? `Segment URL: ${meta.segmentUrl}` : '',
+        meta.variant  ? `Variant: ${meta.variant}` : '',
+        meta.netError ? `Network error: ${meta.netError}` : '',
+      ].filter(Boolean).map(l => l + '\n').join('');
+      const blob = `Xtream TV — stream error\n----\n${msg}\n\nStream URL: ${url}\n${extra}User-Agent: ${ua}\nPage origin: ${location.origin || location.protocol}`;
       copyText(blob, 'Copied error details.');
     });
 

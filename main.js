@@ -5,7 +5,7 @@
 // =====================================================================
 'use strict';
 
-const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog, net } = require('electron');
 const path  = require('node:path');
 const fs    = require('node:fs');
 const http  = require('node:http');
@@ -829,13 +829,16 @@ async function netFetch(url, opts = {}) {
     'Accept': '*/*',
     ...(opts.headers || {}),
   };
+  // opts.timeoutMs overrides the default (the renderer's segment probe fails fast).
+  const timeoutMs = opts.timeoutMs > 0 ? opts.timeoutMs : STATUS_ONLY_TIMEOUT_MS;
+  if (opts.maxBytes > 0) return netFetchCapped(url, headers, opts.maxBytes, timeoutMs, opts.binary);
   // statusOnly: resolve as soon as headers arrive and never read the body —
   // a live .m3u8 may redirect to an endless .ts stream. The controller
   // enforces the headers timeout and then closes the request.
   let controller = null, timer = null, timedOut = false;
   if (opts.statusOnly) {
     controller = new AbortController();
-    timer = setTimeout(() => { timedOut = true; controller.abort(); }, STATUS_ONLY_TIMEOUT_MS);
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   }
   // Use Electron session fetch — shares Chromium cookie jar and goes through
   // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
@@ -848,7 +851,7 @@ async function netFetch(url, opts = {}) {
       signal: controller ? controller.signal : undefined,
     });
   } catch (e) {
-    if (timedOut) throw new Error(`Timed out after ${STATUS_ONLY_TIMEOUT_MS / 1000}s`);
+    if (timedOut) throw new Error(`Timed out after ${timeoutMs / 1000}s`);
     throw e;
   } finally {
     clearTimeout(timer);
@@ -870,6 +873,45 @@ async function netFetch(url, opts = {}) {
     headers: headerObj,
     body,
   };
+}
+
+// GET that reads at most maxBytes of the body (a live .m3u8 can redirect to an
+// endless .ts stream) and reports the final URL after redirects, which the
+// renderer needs to resolve relative segment paths. Uses net.request because
+// session.fetch leaves Response.url empty and hangs with redirect: 'manual'.
+// Same session, so the onBeforeSendHeaders hooks and cookie jar still apply.
+function netFetchCapped(url, headers, maxBytes, timeoutMs, binary) {
+  return new Promise((resolve, reject) => {
+    let finalUrl = url, size = 0, settled = false, status = 0, headerObj = {};
+    const chunks = [];
+    const req = net.request({ url, session: session.defaultSession, useSessionCookies: true, redirect: 'manual' });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    const done = () => {
+      const buf = Buffer.concat(chunks).subarray(0, maxBytes);
+      resolve({ ok: status >= 200 && status < 300, status, url: finalUrl, headers: headerObj,
+                body: binary ? buf.toString('binary') : buf.toString('utf8') });
+    };
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { req.abort(); } catch (e) {}
+      fn();
+    };
+    // Timing out mid-body returns what arrived; before any response it's an error.
+    const timer = setTimeout(() => settle(() => status ? done()
+      : reject(new Error(`Timed out after ${timeoutMs / 1000}s`))), timeoutMs);
+    req.on('redirect', (_code, _method, redirectUrl) => { finalUrl = redirectUrl; req.followRedirect(); });
+    req.on('response', (res) => {
+      status = res.statusCode;
+      for (const [k, v] of Object.entries(res.headers)) headerObj[k] = Array.isArray(v) ? v.join(', ') : v;
+      res.on('data', (c) => { chunks.push(c); size += c.length; if (size >= maxBytes) settle(done); });
+      res.on('end', () => settle(done));
+      res.on('error', (e) => settle(() => reject(e)));
+    });
+    req.on('error', (e) => settle(() => reject(e)));
+    req.end();
+  });
 }
 
 ipcMain.handle('net:fetch', (_evt, url, opts = {}) => netFetch(url, opts));
