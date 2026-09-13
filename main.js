@@ -5,7 +5,7 @@
 // =====================================================================
 'use strict';
 
-const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog, MessageChannelMain } = require('electron');
 const path  = require('node:path');
 const fs    = require('node:fs');
 const http  = require('node:http');
@@ -782,8 +782,48 @@ function createWindow() {
   // Always allow Picture-in-Picture and fullscreen
   win.webContents.on('select-bluetooth-device', (e, _devices, cb) => { e.preventDefault(); cb(''); });
 
+  // Hand the renderer one end of a MessagePort dedicated to mpv2 video
+  // frames. Frames travel over this port (not webContents.send) with
+  // ArrayBuffers in the *transfer* list — see setupMpv2FramePort() for why.
+  // Re-established on every load/reload since a fresh page has no port.
+  win.webContents.on('did-finish-load', () => setupMpv2FramePort(win));
+
   win.loadURL(`http://127.0.0.1:${_rendererPort}/`);
   mainWindow = win;
+}
+
+// One end of a dedicated MessageChannel used solely to ship raw video frames
+// from the mpv addon to the renderer's <canvas>.
+//
+// Why not webContents.send('mpv2:event', frame)? Electron's regular IPC
+// (ipcMain/ipcRenderer/webContents.send) always *copies* the payload via its
+// own structured-clone serialization when crossing the main<->renderer
+// boundary — there is no way to mark a Buffer/ArrayBuffer as transferable on
+// that path. At ~28fps * ~8MB/frame that's ~200MB/s of allocation + copy
+// churn, which was ballooning V8's heap until macOS SIGKILLed the process
+// (confirmed against mpv2-debug logs showing exactly that throughput).
+//
+// MessagePortMain (the Electron flavor of the standard Web MessagePort),
+// once handed to the renderer, behaves like a normal Worker postMessage
+// channel: passing an ArrayBuffer in the second "transfer list" argument
+// *moves* ownership of its backing memory instead of cloning it — the same
+// zero-copy mechanism browsers use to ship large buffers between threads.
+// The addon now allocates each frame as a malloc'd ArrayBuffer (see
+// mpv_addon.cc RenderFrame), so the whole pipeline — native render -> JS
+// object -> renderer paint — involves exactly zero copies of the pixel data.
+let _mpv2FramePort = null;
+function setupMpv2FramePort(win) {
+  try {
+    if (_mpv2FramePort) { try { _mpv2FramePort.close(); } catch (_) {} _mpv2FramePort = null; }
+    const { port1, port2 } = new MessageChannelMain();
+    _mpv2FramePort = port1;
+    _mpv2FramePort.start();
+    win.webContents.postMessage('mpv2:frame-port', null, [port2]);
+    mpv2Log('mpv2 frame MessagePort (re)established');
+  } catch (e) {
+    mpv2Log('setupMpv2FramePort failed:', e.message);
+    _mpv2FramePort = null;
+  }
 }
 
 // ---------- nuke CORS/origin headers on outgoing requests ----------
@@ -878,16 +918,37 @@ async function solveCloudflareChallenge(url, log) {
 // Uses Electron's session fetch (Chromium network stack) so cookies set by
 // manifest/playlist responses are automatically sent on subsequent segment requests.
 async function netFetch(url, opts = {}) {
-  try { new URL(url); } catch (e) { throw new Error('Invalid URL: ' + url); }
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch (e) { throw new Error('Invalid URL: ' + url); }
+
+  // Chromium's modern fetch()/Request implementation (undici-backed) throws
+  // "Request cannot be constructed from a URL that includes credentials" for
+  // any "scheme://user:pass@host" URL — and several IPTV providers hand out
+  // exactly that shape (e.g. http://tvappapk@line.dino.ws/...). Strip the
+  // userinfo out of the URL ourselves and translate it into a standard HTTP
+  // Basic Authorization header instead, which is what the server actually
+  // expects either way.
+  let cleanUrl = url;
+  const authHeaders = {};
+  if (parsedUrl.username || parsedUrl.password) {
+    const user = decodeURIComponent(parsedUrl.username || '');
+    const pass = decodeURIComponent(parsedUrl.password || '');
+    authHeaders['Authorization'] = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+    parsedUrl.username = '';
+    parsedUrl.password = '';
+    cleanUrl = parsedUrl.toString();
+  }
+
   const headers = {
     'User-Agent': FAKE_UA,
     'Accept': '*/*',
+    ...authHeaders,
     ...(opts.headers || {}),
   };
   const doFetch = async () => {
     // Use Electron session fetch — shares Chromium cookie jar and goes through
     // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
-    const res = await session.defaultSession.fetch(url, {
+    const res = await session.defaultSession.fetch(cleanUrl, {
       method: opts.method || 'GET',
       headers,
       body: opts.body,
@@ -1990,22 +2051,124 @@ function loadMpvAddon() {
 
 let _mpvPlayer = null; // native MpvPlayer instance for the active VOD session
 
+// ---- mpv2 debug instrumentation ----
+// Toggle with env var MPV2_DEBUG=1 (or set _mpv2Debug = true at runtime via
+// the `mpv2:debug` IPC below). Frame payloads are extremely high-frequency,
+// so they're summarized into a rolling fps/size counter and logged once a
+// second rather than per-frame, while every other event (property-change,
+// log-message, lifecycle, errors) is logged immediately with a timestamp —
+// this is what lets us see, e.g., whether `pause`/`time-pos` events are
+// actually arriving (autoplay/seek-bar symptoms) and whether frame delivery
+// is steady or bursty (stutter/spinner symptoms).
+let _mpv2Debug = process.env.MPV2_DEBUG === '1';
+let _mpv2FrameStats = { count: 0, bytes: 0, windowStart: 0 };
+let _mpv2LastLogAt = 0;
+// Each frame is a multi-MB raw RGBA Buffer that has to be structured-cloned
+// across the main↔renderer IPC boundary — that serialization runs on the
+// main process's thread (the same thread Electron uses to pump the native
+// event loop), so forwarding every frame the addon produces can saturate it
+// and make the whole app — cursor, menus, window dragging — appear frozen
+// system-wide, independent of anything the renderer does with the frame
+// afterward. Cap forwarding to ~30fps (mpv already renders at ~28fps in
+// steady state, so this is a no-op then) and silently drop any extra frames
+// that arrive during bursts instead of queuing IPC sends.
+const MPV2_MAX_FRAME_FORWARD_HZ = 30;
+let _mpv2LastFrameForwardAt = 0;
+
+function mpv2Log(...args) {
+  if (!_mpv2Debug) return;
+  const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+  castProxyLog(`[mpv2-debug ${ts}]`, ...args);
+}
+
 function notifyMpv2(payload) {
+  if (_mpv2Debug && payload) {
+    if (payload.type === 'frame' || payload.frame || payload.buffer || ArrayBuffer.isView(payload)) {
+      // Frame-ish payload — summarize via a 1s rolling counter instead of
+      // logging every single one (these can arrive 30-60x/sec).
+      const now = Date.now();
+      if (!_mpv2FrameStats.windowStart) _mpv2FrameStats.windowStart = now;
+      _mpv2FrameStats.count += 1;
+      try {
+        const buf = payload.buffer || payload.data || payload;
+        if (buf && typeof buf.length === 'number') _mpv2FrameStats.bytes += buf.length;
+        else if (buf && typeof buf.byteLength === 'number') _mpv2FrameStats.bytes += buf.byteLength;
+      } catch (_) {}
+      const elapsed = now - _mpv2FrameStats.windowStart;
+      if (elapsed >= 1000) {
+        const fps = (_mpv2FrameStats.count / (elapsed / 1000)).toFixed(1);
+        const kbps = (_mpv2FrameStats.bytes / 1024 / (elapsed / 1000)).toFixed(0);
+        mpv2Log(`frames: ${_mpv2FrameStats.count} in ${elapsed}ms (~${fps} fps, ~${kbps} KB/s)`);
+        _mpv2FrameStats = { count: 0, bytes: 0, windowStart: now };
+      }
+    } else if (payload.type === 'property-change' && payload.name === 'time-pos') {
+      // time-pos fires ~10-15x/sec during normal playback — far too noisy to
+      // log every occurrence now that the pipeline is confirmed healthy.
+      // Throttle to roughly once per second so we can still see it's alive.
+      const now = Date.now();
+      if (now - _mpv2LastLogAt >= 1000) {
+        _mpv2LastLogAt = now;
+        mpv2Log('event ->', JSON.stringify(payload));
+      }
+    } else {
+      // Non-frame, non-time-pos events (pause, duration, seeking, log-message,
+      // end-file, etc.) — these are low-frequency and the most useful for
+      // diagnosing playback-state symptoms, so log every one immediately.
+      try { mpv2Log('event ->', JSON.stringify(payload)); }
+      catch (_) { mpv2Log('event -> [unserializable]', payload && payload.type); }
+    }
+  }
+  if (payload && payload.type === 'frame') {
+    const now = Date.now();
+    const minInterval = 1000 / MPV2_MAX_FRAME_FORWARD_HZ;
+    if (_mpv2LastFrameForwardAt && now - _mpv2LastFrameForwardAt < minInterval) {
+      return; // drop — too soon since the last forwarded frame
+    }
+    _mpv2LastFrameForwardAt = now;
+
+    // Ship frames over the dedicated zero-copy MessagePort, transferring
+    // (not cloning) the backing ArrayBuffer the addon just malloc'd. This is
+    // the whole point of setupMpv2FramePort() — see its comment for the full
+    // rationale (avoids the ~200MB/s structured-clone churn that was
+    // OOM/SIGKILL-ing the app).
+    if (_mpv2FramePort) {
+      const buf = payload.buffer;
+      try {
+        _mpv2FramePort.postMessage(
+          { type: 'frame', width: payload.width, height: payload.height, stride: payload.stride, buffer: buf },
+          buf instanceof ArrayBuffer ? [buf] : []
+        );
+      } catch (e) {
+        mpv2Log('frame port postMessage failed:', e.message);
+      }
+      return; // never falls through to webContents.send for frames
+    }
+    // No port yet (e.g. very first frame before did-finish-load fired) —
+    // drop it rather than structured-clone-copying it through the slow path.
+    return;
+  }
   if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('mpv2:event', payload);
   }
 }
 
 function closeMpv2() {
+  mpv2Log('closeMpv2()', _mpvPlayer ? '(destroying active player)' : '(no active player)');
   if (_mpvPlayer) {
-    try { _mpvPlayer.destroy(); } catch (_) {}
+    try { _mpvPlayer.destroy(); } catch (e) { mpv2Log('destroy() threw:', e.message); }
     _mpvPlayer = null;
   }
+  _mpv2FrameStats = { count: 0, bytes: 0, windowStart: 0 };
 }
 
 function openMpv2(url, title, surfaceW, surfaceH) {
+  const t0 = Date.now();
+  mpv2Log(`openMpv2() url=${url} title=${title || ''} surface=${surfaceW || '?'}x${surfaceH || '?'}`);
   const addon = loadMpvAddon();
-  if (!addon.available || !addon.MpvPlayer) return { ok: false, reason: 'not-built', message: addon.error };
+  if (!addon.available || !addon.MpvPlayer) {
+    mpv2Log('openMpv2() addon unavailable:', addon.error);
+    return { ok: false, reason: 'not-built', message: addon.error };
+  }
 
   closeMpv2();
   try {
@@ -2016,17 +2179,32 @@ function openMpv2(url, title, surfaceW, surfaceH) {
       // zero extra copies.
       notifyMpv2(payload);
     });
-    if (surfaceW && surfaceH) _mpvPlayer.setSurfaceSize(surfaceW, surfaceH);
+    mpv2Log(`MpvPlayer constructed in ${Date.now() - t0}ms`);
+    if (surfaceW && surfaceH) {
+      _mpvPlayer.setSurfaceSize(surfaceW, surfaceH);
+      mpv2Log(`setSurfaceSize(${surfaceW}, ${surfaceH})`);
+    }
     // Properties the renderer's overlay needs to mirror playback state —
     // mirrors the set the external-mpv IPC path observes for parity.
-    ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
-     'track-list', 'sub-text', 'eof-reached', 'seeking', 'core-idle']
-      .forEach(p => { try { _mpvPlayer.observeProperty(p); } catch(_){} });
+    const props = ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
+     'track-list', 'sub-text', 'eof-reached', 'seeking', 'core-idle'];
+    props.forEach(p => {
+      try {
+        const rc = _mpvPlayer.observeProperty(p);
+        // mpv_observe_property returns a negative mpv_error code on failure —
+        // the addon used to discard this, which would let a silent
+        // registration failure masquerade as "events just don't arrive".
+        if (typeof rc === 'number' && rc < 0) mpv2Log(`observeProperty('${p}') returned error code ${rc}`);
+      } catch (e) { mpv2Log(`observeProperty('${p}') failed:`, e.message); }
+    });
+    mpv2Log('observing properties:', props.join(', '));
     _mpvPlayer.loadFile(url);
+    mpv2Log(`loadFile() issued — total open() time so far ${Date.now() - t0}ms`);
     castProxyLog(`[mpv2] embedded playback started: ${title || url}`);
     return { ok: true };
   } catch (e) {
     castProxyLog(`[mpv2] open failed: ${e.message}`);
+    mpv2Log('openMpv2() threw:', e.message, e.stack || '');
     closeMpv2();
     return { ok: false, reason: 'error', message: e.message };
   }
@@ -2034,16 +2212,46 @@ function openMpv2(url, title, surfaceW, surfaceH) {
 
 ipcMain.handle('mpv2:available', () => !!loadMpvAddon().available);
 ipcMain.handle('mpv2:open', (_e, url, title, w, h) => openMpv2(url, title, w, h));
+// Lets the renderer flip verbose mpv2 logging on/off at runtime (instead of
+// requiring the MPV2_DEBUG=1 env var + relaunch) — wired to a "Debug" toggle
+// in the player overlay so the user can capture logs around a live repro.
+ipcMain.handle('mpv2:debug', (_e, enabled) => {
+  _mpv2Debug = !!enabled;
+  castProxyLog(`[mpv2] debug logging ${_mpv2Debug ? 'ENABLED' : 'disabled'}`);
+  return _mpv2Debug;
+});
 ipcMain.handle('mpv2:command', (_e, cmdArr) => {
-  if (!_mpvPlayer) return Promise.reject(new Error('no active embedded player'));
-  return _mpvPlayer.command(cmdArr);
+  if (!_mpvPlayer) {
+    mpv2Log('command() with no active player:', JSON.stringify(cmdArr));
+    return Promise.reject(new Error('no active embedded player'));
+  }
+  const t0 = Date.now();
+  mpv2Log('command ->', JSON.stringify(cmdArr));
+  return _mpvPlayer.command(cmdArr).then((res) => {
+    mpv2Log(`command <- ok in ${Date.now() - t0}ms:`, JSON.stringify(cmdArr), '=>', JSON.stringify(res));
+    return res;
+  }).catch((e) => {
+    mpv2Log(`command <- FAILED in ${Date.now() - t0}ms:`, JSON.stringify(cmdArr), 'error:', e.message);
+    throw e;
+  });
 });
 ipcMain.handle('mpv2:setProperty', (_e, name, value) => {
-  if (_mpvPlayer) _mpvPlayer.setProperty(name, value);
+  mpv2Log(`setProperty('${name}', ${JSON.stringify(value)})`, _mpvPlayer ? '' : '(NO ACTIVE PLAYER — dropped)');
+  if (_mpvPlayer) {
+    try {
+      const rc = _mpvPlayer.setProperty(name, value);
+      if (typeof rc === 'number' && rc < 0) mpv2Log(`setProperty('${name}', ${JSON.stringify(value)}) returned error code ${rc}`);
+    } catch (e) { mpv2Log(`setProperty('${name}') threw:`, e.message); }
+  }
   return true;
 });
-ipcMain.handle('mpv2:getProperty', (_e, name) => (_mpvPlayer ? _mpvPlayer.getProperty(name) : null));
+ipcMain.handle('mpv2:getProperty', (_e, name) => {
+  const v = _mpvPlayer ? _mpvPlayer.getProperty(name) : null;
+  mpv2Log(`getProperty('${name}') ->`, JSON.stringify(v));
+  return v;
+});
 ipcMain.handle('mpv2:setSurfaceSize', (_e, w, h) => {
+  mpv2Log(`setSurfaceSize(${w}, ${h})`, _mpvPlayer ? '' : '(NO ACTIVE PLAYER — dropped)');
   if (_mpvPlayer) _mpvPlayer.setSurfaceSize(w, h);
   return true;
 });

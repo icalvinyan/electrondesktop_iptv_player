@@ -219,6 +219,24 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     mpv_render_context_set_update_callback(renderCtx_, &MpvPlayer::OnRenderUpdateThunk, this);
 
     alive_ = true;
+
+    // PRIME THE PUMP: mpv_initialize()/mpv_render_context_create() above can
+    // already enqueue events (log messages, core lifecycle events, etc.)
+    // *before* mpv_set_wakeup_callback() is registered just a few lines up.
+    // libmpv only guarantees the wakeup callback fires for events that arrive
+    // AFTER registration — anything queued during the registration race can
+    // sit in the queue with nobody ever told to drain it. Because DrainEvents
+    // always fully drains (loops until MPV_EVENT_NONE), missing just the
+    // *first* wakeup is enough to also miss the "queue went from empty to
+    // non-empty" edge that would have triggered the next one — i.e. a single
+    // missed kickoff can silently stall the entire property-change/event
+    // pipeline for the rest of the session while frame delivery (a fully
+    // separate OnRenderUpdate/renderPending_ path) keeps working fine. This
+    // exactly matches the symptom captured in mpv2-debug logs: healthy frame
+    // throughput with ZERO property-change/event forwarding, ever. Force one
+    // explicit drain here so any pre-registration events get flushed and the
+    // edge-triggered wakeup machinery starts from a known-clean state.
+    OnWakeup();
   }
 
   ~MpvPlayer() override { TeardownInternal(); }
@@ -238,10 +256,6 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
       mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
       mpv_terminate_destroy(mpv_);
       mpv_ = nullptr;
-    }
-    {
-      std::lock_guard<std::mutex> lk(frameBufMutex_);
-      frameBuf_.clear();
     }
     eventTsfn_.Release();
   }
@@ -285,11 +299,11 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     args.u.list = list;
 
     uint64_t id = nextCmdId_.fetch_add(1);
+    Napi::Promise promise = deferred.Promise();  // copy out before moving into the map
     {
       std::lock_guard<std::mutex> lk(pendingMutex_);
       pending_.emplace(id, std::move(deferred));
     }
-    Napi::Promise promise = pending_[id].Promise();  // copy out before async reply may erase
 
     mpv_node result{};
     int rc = mpv_command_node(mpv_, &args, &result);
@@ -319,16 +333,45 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     if (!alive_ || info.Length() < 2 || !info[0].IsString()) return env.Undefined();
     std::string name = info[0].As<Napi::String>().Utf8Value();
     Napi::Value v = info[1];
+    int rc = 0;
     if (v.IsBoolean()) {
       int flag = v.As<Napi::Boolean>().Value() ? 1 : 0;
-      mpv_set_property(mpv_, name.c_str(), MPV_FORMAT_FLAG, &flag);
-    } else if (v.IsNumber()) {
-      double d = v.As<Napi::Number>().DoubleValue();
-      mpv_set_property(mpv_, name.c_str(), MPV_FORMAT_DOUBLE, &d);
+      rc = mpv_set_property(mpv_, name.c_str(), MPV_FORMAT_FLAG, &flag);
     } else {
-      std::string s = v.ToString().Utf8Value();
-      const char* cs = s.c_str();
-      mpv_set_property(mpv_, name.c_str(), MPV_FORMAT_STRING, &cs);
+      // Route everything else (numbers AND strings) through
+      // mpv_set_property_string, which hands mpv the value as text and lets
+      // mpv's own option/property parser coerce it to whatever underlying
+      // type that property actually uses (INT64, DOUBLE, track-id-or-"no",
+      // etc). This sidesteps guessing the wire format from the JS value's
+      // shape — a previous "whole numbers → INT64, fractional → DOUBLE"
+      // heuristic correctly fixed `aid`/`sid` (INT64 properties) but broke
+      // `volume`/`speed` whenever the UI happened to send a whole-number
+      // value (e.g. volume=80, speed=1): mpv declares those as DOUBLE, so
+      // the INT64-formatted set returned MPV_ERROR_PROPERTY_FORMAT and
+      // silently no-opped — exactly the "volume slider does nothing" symptom.
+      // mpv_set_property_string has handled both cases correctly since it
+      // defers to the property's real declared type instead of ours.
+      std::string s;
+      if (v.IsNumber()) {
+        double d = v.As<Napi::Number>().DoubleValue();
+        if (d == static_cast<int64_t>(d)) {
+          s = std::to_string(static_cast<int64_t>(d));
+        } else {
+          // Enough precision to round-trip mpv's double properties (speed,
+          // volume fractions, time-pos seeks, etc.) without truncation.
+          char buf[64];
+          snprintf(buf, sizeof(buf), "%.6f", d);
+          s = buf;
+        }
+      } else {
+        s = v.ToString().Utf8Value();
+      }
+      rc = mpv_set_property_string(mpv_, name.c_str(), s.c_str());
+    }
+    if (rc < 0) {
+      // Surface failures (wrong property name, rejected value, etc.) instead
+      // of letting them vanish — the JS side logs negative return codes.
+      return Napi::Number::New(env, rc);
     }
     return env.Undefined();
   }
@@ -348,8 +391,12 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     Napi::Env env = info.Env();
     if (!alive_ || info.Length() < 1 || !info[0].IsString()) return env.Undefined();
     std::string name = info[0].As<Napi::String>().Utf8Value();
-    mpv_observe_property(mpv_, observeId_++, name.c_str(), MPV_FORMAT_NODE);
-    return env.Undefined();
+    // Return the mpv error code to JS so a silent registration failure is
+    // visible (previously discarded — see mpv2-debug investigation: we were
+    // seeing zero property-change events reach the renderer and needed to
+    // rule out "the observe call itself failed").
+    int rc = mpv_observe_property(mpv_, observeId_++, name.c_str(), MPV_FORMAT_NODE);
+    return Napi::Number::New(env, rc);
   }
 
   // Tells the SW renderer what resolution to render at — call this with the
@@ -377,10 +424,24 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     if (!alive_) return;
     // Coalesce: many wakeups can fire before the JS thread drains the queue.
     if (wakeupPending_.exchange(true)) return;
-    eventTsfn_.NonBlockingCall(this, [](Napi::Env env, Napi::Function jsCb, MpvPlayer* self) {
+    napi_status st = eventTsfn_.NonBlockingCall(this, [](Napi::Env env, Napi::Function jsCb, MpvPlayer* self) {
       self->wakeupPending_.store(false);
       self->DrainEvents(env, jsCb);
     });
+    if (st != napi_ok) {
+      // CRITICAL: wakeupPending_ is only ever reset to false *inside* the
+      // lambda above. If NonBlockingCall itself fails (queue full / tsfn
+      // closing / env shutting down), that lambda never runs and the flag
+      // is stuck at `true` forever — every subsequent OnWakeup() call then
+      // short-circuits at the exchange() above and DrainEvents() is never
+      // invoked again. This exactly matches the symptom we captured: frames
+      // kept flowing (separate renderPending_/OnRenderUpdate path, unaffected)
+      // but property-change events (pause/time-pos/duration/...) silently
+      // stopped arriving after the initial burst. Reset here so the next
+      // wakeup can retry, and surface a counter so we can see it happen.
+      failedWakeupCalls_.fetch_add(1);
+      wakeupPending_.store(false);
+    }
   }
 
   void OnRenderUpdate() {
@@ -399,49 +460,119 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
   void DrainEvents(Napi::Env env, Napi::Function jsCb) {
     if (!alive_ || !mpv_) return;
     Napi::HandleScope scope(env);
+    uint64_t pass = drainPasses_.fetch_add(1) + 1;
+    int drainedThisPass = 0;
     while (true) {
       mpv_event* ev = mpv_wait_event(mpv_, 0);
       if (!ev || ev->event_id == MPV_EVENT_NONE) break;
+      drainedThisPass++;
 
-      if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
-        auto* msg = static_cast<mpv_event_log_message*>(ev->data);
-        Napi::Object payload = Napi::Object::New(env);
-        payload.Set("type", "log");
-        payload.Set("level", msg->level ? msg->level : "");
-        payload.Set("prefix", msg->prefix ? msg->prefix : "");
-        payload.Set("text", msg->text ? msg->text : "");
-        jsCb.Call({ payload });
-        continue;
-      }
+      // Wrap each event's JS dispatch in try/catch: a single bad value
+      // (e.g. an exception thrown while converting a NODE — track-list is a
+      // nested array-of-maps and the likeliest culprit) must not abort the
+      // whole drain loop and strand the remaining queued mpv events
+      // un-dequeued. Previously an uncaught throw here would propagate out
+      // of DrainEvents -> the NonBlockingCall lambda, silently killing that
+      // drain pass (and possibly the JS callback machinery) — which would
+      // perfectly explain "frames keep flowing but property-changes stop
+      // arriving after the initial burst".
+      try {
+        if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
+          auto* msg = static_cast<mpv_event_log_message*>(ev->data);
+          Napi::Object payload = Napi::Object::New(env);
+          payload.Set("type", "log");
+          payload.Set("level", msg->level ? msg->level : "");
+          payload.Set("prefix", msg->prefix ? msg->prefix : "");
+          payload.Set("text", msg->text ? msg->text : "");
+          jsCb.Call({ payload });
+          continue;
+        }
 
-      if (ev->event_id == MPV_EVENT_PROPERTY_CHANGE) {
-        auto* prop = static_cast<mpv_event_property*>(ev->data);
+        if (ev->event_id == MPV_EVENT_PROPERTY_CHANGE) {
+          auto* prop = static_cast<mpv_event_property*>(ev->data);
+          propertyChangeEvents_.fetch_add(1);
+          Napi::Object payload = Napi::Object::New(env);
+          payload.Set("type", "property-change");
+          payload.Set("name", prop->name ? prop->name : "");
+          if (prop->format == MPV_FORMAT_NODE && prop->data) {
+            payload.Set("value", MpvNodeToJs(env, static_cast<mpv_node*>(prop->data)));
+          } else {
+            payload.Set("value", env.Null());
+          }
+          jsCb.Call({ payload });
+          continue;
+        }
+
+        otherMpvEvents_.fetch_add(1);
         Napi::Object payload = Napi::Object::New(env);
-        payload.Set("type", "property-change");
-        payload.Set("name", prop->name ? prop->name : "");
-        if (prop->format == MPV_FORMAT_NODE && prop->data) {
-          payload.Set("value", MpvNodeToJs(env, static_cast<mpv_node*>(prop->data)));
-        } else {
-          payload.Set("value", env.Null());
+        payload.Set("type", "event");
+        payload.Set("event", mpv_event_name(ev->event_id));
+        if (ev->event_id == MPV_EVENT_END_FILE && ev->data) {
+          auto* ef = static_cast<mpv_event_end_file*>(ev->data);
+          payload.Set("reason", static_cast<double>(ef->reason));
+          payload.Set("error", ef->error);
         }
         jsCb.Call({ payload });
-        continue;
+      } catch (const std::exception& e) {
+        drainExceptions_.fetch_add(1);
+        try {
+          Napi::Object payload = Napi::Object::New(env);
+          payload.Set("type", "event-stats");
+          payload.Set("drainException", e.what());
+          payload.Set("eventId", static_cast<double>(ev->event_id));
+          payload.Set("eventName", mpv_event_name(ev->event_id));
+          jsCb.Call({ payload });
+        } catch (...) { /* give up reporting — do not let this kill the loop */ }
+      } catch (...) {
+        drainExceptions_.fetch_add(1);
       }
-
-      Napi::Object payload = Napi::Object::New(env);
-      payload.Set("type", "event");
-      payload.Set("event", mpv_event_name(ev->event_id));
-      if (ev->event_id == MPV_EVENT_END_FILE && ev->data) {
-        auto* ef = static_cast<mpv_event_end_file*>(ev->data);
-        payload.Set("reason", static_cast<double>(ef->reason));
-        payload.Set("error", ef->error);
-      }
-      jsCb.Call({ payload });
 
       if (ev->event_id == MPV_EVENT_SHUTDOWN) break;
     }
+
+    // Periodic heartbeat (every 50th drain pass that actually had events, and
+    // always on the very first pass) so the renderer can confirm DrainEvents
+    // is still being invoked and see the running event-type breakdown — this
+    // is the direct evidence needed to confirm/rule out a stalled pipeline.
+    if (drainedThisPass > 0 && (pass == 1 || pass % 50 == 0)) {
+      try {
+        Napi::Object payload = Napi::Object::New(env);
+        payload.Set("type", "event-stats");
+        payload.Set("drainPasses", static_cast<double>(drainPasses_.load()));
+        payload.Set("propertyChangeEvents", static_cast<double>(propertyChangeEvents_.load()));
+        payload.Set("otherMpvEvents", static_cast<double>(otherMpvEvents_.load()));
+        payload.Set("drainExceptions", static_cast<double>(drainExceptions_.load()));
+        payload.Set("failedWakeupCalls", static_cast<double>(failedWakeupCalls_.load()));
+        jsCb.Call({ payload });
+      } catch (...) {}
+    }
   }
 
+  // ---------------------------------------------------------------------
+  // Zero-copy frame delivery
+  //
+  // The previous version rendered into a reused std::vector<uint8_t>
+  // (frameBuf_) and then Napi::Buffer<uint8_t>::Copy()'d it into a Node
+  // Buffer — copy #1. That Buffer then crossed the main->renderer process
+  // boundary via webContents.send(), which structured-clones (= copies)
+  // the whole payload again — copy #2. At ~28fps * ~8MB/frame that's
+  // ~200MB/s of churn, enough to balloon V8's heap until macOS SIGKILLs
+  // the process (see mpv2-debug log analysis).
+  //
+  // Fix: allocate each frame's backing store as a *V8-owned* Napi::ArrayBuffer
+  // (Napi::ArrayBuffer::New(env, byteLength) — NOT the externally-backed
+  // overload, and NOT a pooled Node Buffer). This matters for a subtle but
+  // critical reason discovered the hard way: ArrayBuffers wrapping
+  // externally-malloc'd memory are *not detachable*, and MessagePort
+  // transfer requires a detachable buffer — every attempt to transfer one
+  // threw "could not be cloned"/DataCloneError synchronously inside the
+  // native callback, which Node logs as "Uncaught Node-API callback
+  // exception" (flooding the log) and which compounded into the crash. A
+  // V8-managed ArrayBuffer *is* detachable, so transfer actually works —
+  // and we still get true zero-copy delivery because mpv renders directly
+  // into that buffer's backing memory (ab.Data()); there is no separate
+  // native allocation to copy from.
+  // ---------------------------------------------------------------------
   void RenderFrame(Napi::Env env, Napi::Function jsCb) {
     if (!alive_ || !renderCtx_) return;
     Napi::HandleScope scope(env);
@@ -451,14 +582,17 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
       std::lock_guard<std::mutex> lk(frameBufMutex_);
       w = surfaceW_;
       h = surfaceH_;
-      size_t needed = static_cast<size_t>(w) * h * 4;
-      if (frameBuf_.size() != needed) frameBuf_.assign(needed, 0);
     }
 
     int stride = w * 4;
-    void* pixels = frameBuf_.data();
+    size_t byteLen = static_cast<size_t>(stride) * h;
+
+    Napi::ArrayBuffer ab = Napi::ArrayBuffer::New(env, byteLen);
+    void* pixels = ab.Data();
+
+    int swSize[2] = { w, h };
     mpv_render_param renderParams[] = {
-      { MPV_RENDER_PARAM_SW_SIZE, &(int[]){ w, h } },
+      { MPV_RENDER_PARAM_SW_SIZE, swSize },
       { MPV_RENDER_PARAM_SW_FORMAT, const_cast<char*>("rgba") },
       { MPV_RENDER_PARAM_SW_STRIDE, &stride },
       { MPV_RENDER_PARAM_SW_POINTER, pixels },
@@ -468,17 +602,12 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
     if (rc < 0) return;
     mpv_render_context_report_swap(renderCtx_);
 
-    // Copy into a Buffer the JS side owns — keeps frameBuf_ stable for reuse
-    // on the next frame without racing the renderer's consumption of it.
-    Napi::Buffer<uint8_t> outBuf = Napi::Buffer<uint8_t>::Copy(
-        env, static_cast<uint8_t*>(pixels), static_cast<size_t>(stride) * h);
-
     Napi::Object payload = Napi::Object::New(env);
     payload.Set("type", "frame");
     payload.Set("width", w);
     payload.Set("height", h);
     payload.Set("stride", stride);
-    payload.Set("buffer", outBuf);
+    payload.Set("buffer", ab);
     jsCb.Call({ payload });
   }
 
@@ -490,11 +619,17 @@ class MpvPlayer : public Napi::ObjectWrap<MpvPlayer> {
   std::atomic<bool> alive_{false};
   std::atomic<bool> wakeupPending_{false};
   std::atomic<bool> renderPending_{false};
+  // mpv2-debug instrumentation counters (surfaced to JS via periodic
+  // 'event-stats' payloads from DrainEvents) — see OnWakeup()/DrainEvents().
+  std::atomic<uint64_t> failedWakeupCalls_{0};
+  std::atomic<uint64_t> drainPasses_{0};
+  std::atomic<uint64_t> propertyChangeEvents_{0};
+  std::atomic<uint64_t> otherMpvEvents_{0};
+  std::atomic<uint64_t> drainExceptions_{0};
   std::atomic<uint64_t> nextCmdId_{1};
   uint64_t observeId_ = 1;
 
   std::mutex frameBufMutex_;
-  std::vector<uint8_t> frameBuf_;
   int surfaceW_ = 1280;
   int surfaceH_ = 720;
 

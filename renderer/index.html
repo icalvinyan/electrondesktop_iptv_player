@@ -1944,7 +1944,7 @@
                 <span><span class="kbd">S</span> favorite</span>
               </div>
             </div>
-            <details class="section">
+            <details class="section" id="server-profile-section">
               <summary>Server profile</summary>
               <div id="server-edit-area" style="margin-top:10px;"></div>
             </details>
@@ -3138,6 +3138,7 @@
         <div class="row-actions">
           <button class="primary" data-act="connect" data-id="${s.id}">Connect</button>
           ${s.type === 'm3u' ? '' : '<button data-act="edit" data-id="' + s.id + '">Edit</button>'}
+          ${s.type !== 'm3u' && s.host && s.username && s.password ? '<button data-act="copy-m3u" data-id="' + s.id + '" title="Copy M3U playlist URL">Copy URL</button>' : ''}
           <button class="danger" data-act="del" data-id="${s.id}">Delete</button>
         </div>`;
       wrap.appendChild(row);
@@ -3267,6 +3268,21 @@
     } else if (btn.dataset.act === 'star') {
       Storage.toggleServerFavorite(id);
       renderServerList();
+    } else if (btn.dataset.act === 'copy-m3u') {
+      const url = `${s.host}/get.php?username=${encodeURIComponent(s.username)}&password=${encodeURIComponent(s.password)}&type=m3u_plus&output=m3u8`;
+      navigator.clipboard.writeText(url).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta);
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      });
     } else if (btn.dataset.act === 'del') {
       if (confirm('Delete this server profile? Favorites for this server will also be removed.')) {
         Storage.removeServer(id);
@@ -4773,8 +4789,9 @@
   const VOD_FF_STEPS = [2, 4, 8, 16];
 
   function vodFastForward(dir) {
-    const video = State.player && State.player.video;
-    if (!video) return;
+    const mpv2 = Mpv2.active;
+    const video = !mpv2 && State.player && State.player.video;
+    if (!mpv2 && !video) return;
     if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
 
     if (VodTransport.ffDir !== dir) { VodTransport.ffDir = dir; VodTransport.ffRate = 1; }
@@ -4789,15 +4806,22 @@
       // Wrap back to normal playback.
       VodTransport.ffRate = 1;
       VodTransport.ffDir = 0;
-      try { video.playbackRate = 1; } catch (e) {}
+      if (mpv2) Mpv2.setSpeed(1); else try { video.playbackRate = 1; } catch (e) {}
       toast('Normal speed');
       return;
     }
 
     if (dir > 0) {
-      // Native forward fast-play via playbackRate.
-      try { video.playbackRate = VodTransport.ffRate; } catch (e) {}
+      // Native forward fast-play.
+      if (mpv2) Mpv2.setSpeed(VodTransport.ffRate);
+      else try { video.playbackRate = VodTransport.ffRate; } catch (e) {}
       toast('▶▶ ' + VodTransport.ffRate + 'x');
+    } else if (mpv2) {
+      // libmpv can't play in reverse either — simulate rewind via relative seeks.
+      Mpv2.setSpeed(1);
+      const rate = VodTransport.ffRate;
+      VodTransport.ffTimer = setInterval(() => { Mpv2.seekRelative(-(rate * 0.25)); }, 250);
+      toast('◀◀ ' + rate + 'x');
     } else {
       // HTML5 video can't play in reverse — simulate rewind by stepping currentTime backward.
       try { video.playbackRate = 1; } catch (e) {}
@@ -4825,11 +4849,13 @@
     if (ipa) ipa.style.display = playing ? '' : 'none';
   }
   $('#btn-play').addEventListener('click', () => {
+    if (Mpv2.active) { Mpv2.togglePause(); return; }
     if (State.mode === 'vod' && (VodTransport.ffRate !== 1 || VodTransport.ffTimer)) { resetVodTransport(); }
     if (State.player.isPlaying()) { State.player.pause(); setPlayIcon(false); }
     else { State.player.play(); setPlayIcon(true); }
   });
   $('#btn-stop').addEventListener('click', () => {
+    if (Mpv2.active) { exitVodPlayback(); return; }
     if (!State.player) return;
     State.player.stop();
     State.currentChannel = null;
@@ -4861,13 +4887,21 @@
     if (ic2) ic2.style.display = muted ? '' : 'none';
   }
   $('#btn-mute').addEventListener('click', () => {
+    if (Mpv2.active) {
+      if (Mpv2.volume > 0) { Mpv2._unmuteVolume = Mpv2.volume; Mpv2.setVolume(0); }
+      else { Mpv2.setVolume(Mpv2._unmuteVolume || 80); }
+      Mpv2.syncControls();
+      return;
+    }
     const v = $('#video');
     v.muted = !v.muted;
     setMuteIcon(v.muted);
     Storage.setSetting('muted', v.muted);
   });
   $('#vol').addEventListener('input', () => {
-    const v = +$('#vol').value / 100;
+    const raw = +$('#vol').value;
+    if (Mpv2.active) { Mpv2.setVolume(raw); Mpv2.syncControls(); return; }
+    const v = raw / 100;
     State.player.setVolume(v);
     Storage.setSetting('volume', v);
   });
@@ -5072,6 +5106,8 @@
     if (midDivider) midDivider.style.display = 'none';
     const integrations = $('#integrations-section');
     if (integrations) integrations.open = true;
+    const serverProfile = $('#server-profile-section');
+    if (serverProfile) serverProfile.open = true;
     openModal('settings-modal');
   });
   $('#s-container').addEventListener('change', () => {
@@ -5091,6 +5127,9 @@
     const srv = Storage.activeServer();
     const root = $('#server-edit-area');
     if (!srv) { root.innerHTML = '<div style="color:var(--muted)">No active server.</div>'; return; }
+    const m3uUrl = (srv.host && srv.username && srv.password)
+      ? `${srv.host}/get.php?username=${encodeURIComponent(srv.username)}&password=${encodeURIComponent(srv.password)}&type=m3u_plus&output=m3u8`
+      : '';
     root.innerHTML = `
       <div class="server-form" style="grid-template-columns: 1fr 1fr;">
         <div class="full"><label>Profile name</label><input id="se-name" type="text" value="${escapeHtml(srv.name||'')}"></div>
@@ -5107,6 +5146,15 @@
           </div>
         </div>
         <div class="full"><label>CORS proxy</label><input id="se-proxy" type="text" value="${escapeHtml(srv.proxy||'')}"></div>
+        ${m3uUrl ? `
+        <div class="full">
+          <label>M3U URL</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="se-m3u-url" type="text" value="${escapeHtml(m3uUrl)}" readonly
+              style="flex:1;font-family:monospace;font-size:11px;color:var(--muted);cursor:text;user-select:all;">
+            <button id="se-copy-m3u" type="button" style="white-space:nowrap;flex-shrink:0;">Copy URL</button>
+          </div>
+        </div>` : ''}
         <div class="full form-actions">
           <button id="se-save" class="primary">Save changes</button>
         </div>
@@ -5123,6 +5171,22 @@
       closeModal('settings-modal');
       await connectToServer(Storage.activeServer());
     });
+    const copyBtn = $('#se-copy-m3u');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        const url = $('#se-m3u-url').value;
+        navigator.clipboard.writeText(url).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy URL'; }, 2000);
+        }).catch(() => {
+          // Fallback for environments where clipboard API is unavailable
+          $('#se-m3u-url').select();
+          document.execCommand('copy');
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy URL'; }, 2000);
+        });
+      });
+    }
   }
 
   /* ---- VOD integrations panel (Real-Debrid / Trakt / scraper prefs) ---- */
@@ -6266,25 +6330,117 @@
     unsub: null,
     canvas: null, ctx: null,
     imageData: null,
-    bar: null,
     paused: true, position: 0, duration: 0, volume: 80,
     seeking: false,
     resizeObs: null,
 
+    // ---- debug instrumentation ----
+    // Toggle with Ctrl+Shift+D while the embedded player is active. Mirrors
+    // a rolling log buffer the user can copy/paste to share, plus an
+    // on-screen HUD with live stats — aimed at the four reported symptoms:
+    // delayed autoplay, stutter, seek bar not tracking, and spinner/hangs
+    // (the last of which is most likely `paint()` blocking the main thread,
+    // so paint calls are timed and any slow ones are flagged).
+    debugOn: false,
+    _dbgBuf: [],
+    _dbgEl: null,
+    _frameStats: { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 },
+
+    dlog(...args) {
+      const ts = new Date().toISOString().slice(11, 23);
+      const line = `[${ts}] ` + args.map((a) => {
+        if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+        return String(a);
+      }).join(' ');
+      this._dbgBuf.push(line);
+      if (this._dbgBuf.length > 400) this._dbgBuf.splice(0, this._dbgBuf.length - 400);
+      if (this.debugOn) console.debug('[Mpv2]', line);
+      this._renderHud();
+    },
+
+    async toggleDebug() {
+      this.debugOn = !this.debugOn;
+      try { window.xtream.mpv2Debug && window.xtream.mpv2Debug(this.debugOn); } catch (e) {}
+      this._frameStats = { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 };
+      if (this.debugOn) {
+        this._buildHud();
+        this.dlog('debug logging ENABLED — also enabled in main process (mpv2:debug)');
+        toast('Native-player debug logging on — press Ctrl+Shift+D again to copy & turn off.');
+      } else {
+        this.dlog('debug logging disabled — copying log to clipboard');
+        const text = this._dbgBuf.join('\n');
+        try { await navigator.clipboard.writeText(text); toast(`Copied ${this._dbgBuf.length} debug log lines to clipboard.`); }
+        catch (e) { toast('Could not copy to clipboard — open DevTools console to view the log.'); }
+        this._removeHud();
+      }
+    },
+
+    _buildHud() {
+      if (this._dbgEl || !this.canvas) return;
+      const el = document.createElement('div');
+      el.id = 'mpv2-debug-hud';
+      el.style.cssText = 'position:absolute;top:10px;left:10px;z-index:50;max-width:46%;'
+        + 'background:rgba(0,0,0,0.72);color:#9f9;font:11px/1.4 ui-monospace,Menlo,monospace;'
+        + 'padding:8px 10px;border-radius:6px;white-space:pre-wrap;pointer-events:none;'
+        + 'max-height:60%;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.4);';
+      (this.canvas.parentElement || document.body).appendChild(el);
+      this._dbgEl = el;
+      this._renderHud();
+    },
+    _removeHud() {
+      if (this._dbgEl) { try { this._dbgEl.remove(); } catch (e) {} this._dbgEl = null; }
+    },
+    _renderHud() {
+      if (!this._dbgEl) return;
+      const fs = this._frameStats;
+      const head = `mpv2 debug — Ctrl+Shift+D to copy log & stop\n`
+        + `paused=${this.paused} pos=${(this.position || 0).toFixed(1)}/${(this.duration || 0).toFixed(1)} `
+        + `seeking=${this.seeking} vol=${this.volume}\n`
+        + `paint: last=${fs.lastPaintMs.toFixed(1)}ms max=${fs.maxPaintMs.toFixed(1)}ms `
+        + `slow(>16ms)=${fs.slowCount} fps≈${fs.fps || 0}\n`
+        + '─'.repeat(40) + '\n';
+      const tail = this._dbgBuf.slice(-14).join('\n');
+      this._dbgEl.textContent = head + tail;
+    },
+
+    // Cap the render-surface resolution mpv is asked to produce. Each frame
+    // crosses IPC as a raw RGBA buffer (w*h*4 bytes) and is then blitted with
+    // a synchronous putImageData on the main/UI thread. At full retina size
+    // (e.g. 2940x1750 ≈ 20.6MB/frame, ~577MB/s @ 28fps) that workload is large
+    // enough to stall the renderer's event loop — which is what produces the
+    // system-wide spinning-cursor / unresponsive-input symptom, since Chromium
+    // can't service input/compositor work while busy copying & painting.
+    // The canvas is scaled to the wrap element via CSS regardless, so there's
+    // no visual benefit to exceeding ~1080p of surface — clamp the longest
+    // edge there and let CSS upscale on higher-DPI displays.
+    MAX_SURFACE_EDGE: 1920,
+    clampSurfaceSize(w, h) {
+      const longest = Math.max(w, h);
+      if (longest <= this.MAX_SURFACE_EDGE) return { w, h };
+      const scale = this.MAX_SURFACE_EDGE / longest;
+      return { w: Math.max(2, Math.round(w * scale)), h: Math.max(2, Math.round(h * scale)) };
+    },
+
     teardown() {
+      if (this.debugOn) { this.dlog('teardown()'); }
       if (this.unsub) { try { this.unsub(); } catch (e) {} this.unsub = null; }
       if (this.resizeObs) { try { this.resizeObs.disconnect(); } catch (e) {} this.resizeObs = null; }
-      if (this.bar && this.bar.parentNode) this.bar.parentNode.removeChild(this.bar);
-      this.bar = null;
       if (this.canvas) { this.canvas.classList.add('hidden'); this.ctx = null; this.imageData = null; }
+      try { closeAllTrackMenus(); } catch (e) {}
+      this._removeHud();
       this.active = false;
+      this.tracks = null;
+      this._pendingFrame = null;
+      this._paintScheduled = false;
       this.paused = true; this.position = 0; this.duration = 0; this.seeking = false;
     },
 
     async tryStart(url, title) {
+      const t0 = performance.now();
       if (!(window.xtream && window.xtream.mpv2Available && window.xtream.mpv2Open)) return false;
       let available = false;
       try { available = await window.xtream.mpv2Available(); } catch (e) {}
+      this.dlog(`tryStart: addon available=${available} (+${(performance.now() - t0).toFixed(0)}ms)`);
       if (!available) return false;
 
       this.canvas = $('#mpv2-canvas');
@@ -6292,12 +6448,14 @@
       const wrap = $('#player-wrap');
       const rect = wrap ? wrap.getBoundingClientRect() : { width: 1280, height: 720 };
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(2, Math.round((rect.width || 1280) * dpr));
-      const h = Math.max(2, Math.round((rect.height || 720) * dpr));
+      const rawW = Math.max(2, Math.round((rect.width || 1280) * dpr));
+      const rawH = Math.max(2, Math.round((rect.height || 720) * dpr));
+      const { w, h } = this.clampSurfaceSize(rawW, rawH);
 
       let res;
       try { res = await window.xtream.mpv2Open(url, title, w, h); }
       catch (e) { res = { ok: false, message: e && e.message }; }
+      this.dlog(`mpv2Open(${w}x${h}) -> ok=${!!(res && res.ok)} ${res && res.message ? 'msg=' + res.message : ''} (+${(performance.now() - t0).toFixed(0)}ms total)`);
       if (!res || !res.ok) return false;
 
       this.canvas.width = w;
@@ -6307,13 +6465,19 @@
       this.imageData = null;
       this.active = true;
       this.paused = true; this.position = 0; this.duration = 0;
+      this._pendingFrame = null;
+      this._paintScheduled = false;
+      this._frameStats = { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 };
 
-      this.buildControls();
+      this.bindControls();
+      this.syncControls();
+      initVodTrackButtons();
       this.watchResize(wrap, dpr);
 
       if (window.xtream.onMpv2Event) {
         this.unsub = window.xtream.onMpv2Event((payload) => this.onEvent(payload));
       }
+      this.dlog(`tryStart complete in ${(performance.now() - t0).toFixed(0)}ms — waiting for first frame/property events`);
       toast('Playing with the embedded native player — full .mkv/audio/subtitle support, no external app.');
       return true;
     },
@@ -6323,8 +6487,9 @@
       this.resizeObs = new ResizeObserver(() => {
         if (!this.active || !this.canvas) return;
         const rect = wrap.getBoundingClientRect();
-        const w = Math.max(2, Math.round(rect.width * (window.devicePixelRatio || 1)));
-        const h = Math.max(2, Math.round(rect.height * (window.devicePixelRatio || 1)));
+        const rawW = Math.max(2, Math.round(rect.width * (window.devicePixelRatio || 1)));
+        const rawH = Math.max(2, Math.round(rect.height * (window.devicePixelRatio || 1)));
+        const { w, h } = this.clampSurfaceSize(rawW, rawH);
         if (w === this.canvas.width && h === this.canvas.height) return;
         this.canvas.width = w;
         this.canvas.height = h;
@@ -6337,13 +6502,27 @@
     onEvent(payload) {
       if (!payload || !this.active) return;
       switch (payload.type) {
-        case 'frame':
-          this.paint(payload);
-          break;
+        // 'frame' payloads no longer arrive here — they're delivered over the
+        // dedicated zero-copy MessagePort (see onFramePortMessage / the
+        // window 'message' listener below the object) so their multi-MB
+        // ArrayBuffers never get structured-cloned through mpv2:event.
         case 'property-change':
+          if (this.debugOn && payload.name !== 'time-pos') this.dlog(`property: ${payload.name} =`, payload.value);
           this.onProperty(payload.name, payload.value);
           break;
+        case 'event-stats':
+          // Diagnostic heartbeat from the native addon's DrainEvents loop —
+          // confirms whether mpv property-change events are actually being
+          // generated/drained, and surfaces the "stuck wakeupPending_" /
+          // "exception mid-drain" failure modes we were chasing.
+          if (payload.drainException) {
+            this.dlog(`*** DRAIN EXCEPTION on ${payload.eventName} (id ${payload.eventId}): ${payload.drainException}`);
+          } else {
+            this.dlog(`event-stats: drainPasses=${payload.drainPasses} propertyChanges=${payload.propertyChangeEvents} otherEvents=${payload.otherMpvEvents} drainExceptions=${payload.drainExceptions} failedWakeups=${payload.failedWakeupCalls}`);
+          }
+          break;
         case 'event':
+          this.dlog(`mpv event: ${payload.event}`);
           if (payload.event === 'end-file' || payload.event === 'shutdown') {
             // Playback ended (or mpv core died) — behave like exitVodPlayback.
             this.teardown();
@@ -6355,128 +6534,243 @@
             }
           }
           break;
+        default:
+          if (this.debugOn) this.dlog('unrecognized event payload type:', payload.type, payload);
+          break;
       }
     },
 
     onProperty(name, value) {
       switch (name) {
-        case 'pause': this.paused = !!value; this.syncControls(); break;
-        case 'time-pos': if (!this.seeking && typeof value === 'number') { this.position = value; this.syncControls(); } break;
-        case 'duration': if (typeof value === 'number') { this.duration = value; this.syncControls(); } break;
+        case 'pause':
+          this.paused = !!value;
+          this.dlog(`pause -> ${this.paused}${this.paused ? '' : '  (mpv reports playing — UI should now show pause icon)'}`);
+          this.syncControls();
+          break;
+        case 'time-pos':
+          if (typeof value === 'number') {
+            // Logged at low frequency (once/sec) — high-frequency time-pos
+            // spam would drown out the more useful events. This is the key
+            // signal for the "seek bar doesn't track" symptom: if these
+            // stop arriving, or `seeking` stays stuck true, the bar freezes.
+            const now = Date.now();
+            if (!this._lastTimePosLog || now - this._lastTimePosLog > 1000) {
+              this._lastTimePosLog = now;
+              this.dlog(`time-pos -> ${value.toFixed(2)} (seeking=${this.seeking}, applied=${!this.seeking})`);
+            }
+            if (!this.seeking) { this.position = value; this.syncControls(); }
+          }
+          break;
+        case 'duration':
+          if (typeof value === 'number') { this.duration = value; this.dlog(`duration -> ${value.toFixed(2)}`); this.syncControls(); }
+          break;
         case 'volume': if (typeof value === 'number') { this.volume = value; this.syncControls(); } break;
+        case 'core-idle':
+          this.dlog(`core-idle -> ${value} ${value ? '(buffering/stalled — likely cause of stop/start stutter)' : '(actively decoding)'}`);
+          break;
+        case 'seeking':
+          this.dlog(`seeking (mpv-reported) -> ${value}`);
+          break;
+        case 'eof-reached':
+          if (value) this.dlog('eof-reached -> true');
+          break;
+        case 'track-list':
+          this.tracks = Array.isArray(value) ? value : null;
+          this.dlog(`track-list -> ${this.tracks ? this.tracks.length : 0} tracks`);
+          try { VodTracks.refresh && VodTracks.refresh(); } catch (e) {}
+          break;
       }
+    },
+
+    schedulePaint() {
+      if (this._paintScheduled) return;
+      this._paintScheduled = true;
+      requestAnimationFrame(() => {
+        this._paintScheduled = false;
+        const frame = this._pendingFrame;
+        this._pendingFrame = null;
+        if (frame) this.paint(frame);
+      });
     },
 
     paint(frame) {
       if (!this.ctx || !frame || !frame.buffer || !frame.width || !frame.height) return;
-      // frame.buffer arrives as a Uint8Array (structured-cloned from the
-      // addon's Node Buffer) of tightly-packed RGBA rows (stride === w*4).
+      const t0 = (this.debugOn || this._dbgEl) ? performance.now() : 0;
+      // frame.buffer now arrives as a *transferred* ArrayBuffer — it crossed
+      // every boundary (native -> addon -> main -> preload -> here) by
+      // ownership transfer, never structured-clone copying. Wrap it directly
+      // as the ImageData's backing store instead of allocating a persistent
+      // ImageData and .set()-copying into it each frame — that was the last
+      // remaining per-frame copy in the whole pipeline.
       const expected = frame.width * frame.height * 4;
-      let bytes = frame.buffer;
-      if (!(bytes instanceof Uint8ClampedArray)) bytes = new Uint8ClampedArray(bytes.buffer || bytes, bytes.byteOffset || 0, expected);
-      if (!this.imageData || this.imageData.width !== frame.width || this.imageData.height !== frame.height) {
-        this.imageData = new ImageData(frame.width, frame.height);
+      let imageData = null;
+      try {
+        const clamped = new Uint8ClampedArray(frame.buffer, 0, expected);
+        imageData = new ImageData(clamped, frame.width, frame.height);
+      } catch (e) {
+        // Fallback for engines that reject custom-backed ImageData — copy
+        // into a reusable ImageData instead of dropping the frame.
+        if (!this.imageData || this.imageData.width !== frame.width || this.imageData.height !== frame.height) {
+          this.imageData = new ImageData(frame.width, frame.height);
+        }
+        try { this.imageData.data.set(new Uint8ClampedArray(frame.buffer, 0, expected)); imageData = this.imageData; }
+        catch (e2) { return; }
       }
-      this.imageData.data.set(bytes.subarray(0, expected));
-      this.ctx.putImageData(this.imageData, 0, 0);
+      this.ctx.putImageData(imageData, 0, 0);
+
+      if (t0) {
+        // Times each paint — putImageData runs on the main/UI thread, so a
+        // slow one (>16ms, i.e. missing a 60fps frame budget) is a direct
+        // candidate for the "mouse turns into a load wheel" symptom,
+        // especially if these cluster or grow with frame size.
+        const ms = performance.now() - t0;
+        const fs = this._frameStats;
+        fs.count += 1;
+        fs.lastPaintMs = ms;
+        if (ms > fs.maxPaintMs) fs.maxPaintMs = ms;
+        if (ms > 16) {
+          fs.slowCount += 1;
+          this.dlog(`SLOW paint: ${ms.toFixed(1)}ms for ${frame.width}x${frame.height} frame (#${fs.slowCount} slow so far — may cause cursor stalls)`);
+        }
+        const now = Date.now();
+        if (!fs.windowStart) fs.windowStart = now;
+        const elapsed = now - fs.windowStart;
+        if (elapsed >= 1000) {
+          fs.fps = (fs.count / (elapsed / 1000)).toFixed(1);
+          this.dlog(`frame stats: ${fs.count} frames in ${elapsed}ms (~${fs.fps} fps), last=${fs.lastPaintMs.toFixed(1)}ms max=${fs.maxPaintMs.toFixed(1)}ms slow=${fs.slowCount}`);
+          fs.count = 0; fs.windowStart = now;
+        }
+        this._renderHud();
+      }
     },
 
-    // --- minimal transport overlay (play/pause, seek, volume, exit) --------
-    buildControls() {
-      if (this.bar) return;
-      const wrap = $('#player-wrap');
-      if (!wrap) return;
-      const bar = document.createElement('div');
-      bar.id = 'mpv2-controls';
-      bar.style.cssText = 'position:absolute; left:0; right:0; bottom:0; z-index:50; display:flex; align-items:center; gap:12px; padding:14px 22px; background:linear-gradient(transparent, rgba(0,0,0,.75)); font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#fff;';
-      bar.innerHTML = `
-        <button data-act="back" title="Back to library" style="background:none;border:0;color:#fff;font-size:18px;cursor:pointer;opacity:.85">&#8592;</button>
-        <button data-act="playpause" title="Play / Pause (Space)" style="background:none;border:0;color:#fff;font-size:20px;cursor:pointer;width:28px">&#9208;</button>
-        <span data-el="time-cur" style="min-width:46px;text-align:right;opacity:.85">0:00</span>
-        <input data-el="seek" type="range" min="0" max="1000" value="0" step="1" style="flex:1;accent-color:#e50914;cursor:pointer">
-        <span data-el="time-dur" style="min-width:46px;opacity:.85">0:00</span>
-        <span style="opacity:.6">&#128266;</span>
-        <input data-el="volume" type="range" min="0" max="100" value="80" step="1" style="width:90px;accent-color:#fff;cursor:pointer">
-        <span style="font-size:11px;opacity:.55;letter-spacing:.04em;text-transform:uppercase">Native (libmpv)</span>
-      `;
-      wrap.appendChild(bar);
-      this.bar = bar;
+    // --- controls: reuse the EXACT same overlay controls-bar the in-app
+    // <video> VOD path uses (play/pause, stop, back, seek row, volume,
+    // audio/subtitle tracks, skip/fast-forward) — rather than a separate
+    // bar — so the UI is identical and there's only ever one set of
+    // controls on screen. The shared button handlers (search "Mpv2.active"
+    // below) branch to the methods here instead of driving <video>.
+    tracks: null,
 
-      const fmt = (s) => {
-        s = Math.max(0, Math.floor(s || 0));
-        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-        return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
-      };
-      this._fmt = fmt;
-      this._els = {
-        playpause: bar.querySelector('[data-act="playpause"]'),
-        cur: bar.querySelector('[data-el="time-cur"]'),
-        dur: bar.querySelector('[data-el="time-dur"]'),
-        seek: bar.querySelector('[data-el="seek"]'),
-        volume: bar.querySelector('[data-el="volume"]'),
-      };
-
-      bar.querySelector('[data-act="back"]').addEventListener('click', () => exitVodPlayback());
-      bar.querySelector('[data-act="playpause"]').addEventListener('click', () => this.togglePause());
-      this._els.seek.addEventListener('input', (e) => {
-        this.seeking = true;
-        const frac = (+e.target.value) / 1000;
-        this.position = frac * (this.duration || 0);
-        this._els.cur.textContent = fmt(this.position);
-      });
-      this._els.seek.addEventListener('change', (e) => {
-        const frac = (+e.target.value) / 1000;
-        const target = frac * (this.duration || 0);
-        this.command(['seek', target, 'absolute']).finally(() => { this.seeking = false; });
-      });
-      this._els.volume.addEventListener('input', (e) => {
-        const v = +e.target.value;
-        this.volume = v;
-        try { window.xtream.mpv2SetProperty('volume', v); } catch (err) {}
-      });
-
-      this._kbHandler = (e) => {
-        if (!this.active) return;
-        if (e.code === 'Space') { e.preventDefault(); this.togglePause(); }
-        else if (e.code === 'ArrowRight') { this.command(['seek', 10, 'relative']); }
-        else if (e.code === 'ArrowLeft') { this.command(['seek', -10, 'relative']); }
-        else if (e.code === 'Escape') { exitVodPlayback(); }
-      };
-      document.addEventListener('keydown', this._kbHandler);
-
-      this.syncControls();
+    bindControls() {
+      if (this._controlsBound) return;
+      this._controlsBound = true;
+      const seek = $('#vod-seek');
+      const curEl = $('#vod-time-cur');
+      const durEl = $('#vod-time-dur');
+      this._seekEls = { seek, curEl, durEl };
+      if (seek) {
+        seek.addEventListener('input', () => {
+          if (!this.active) return;
+          this.seeking = true;
+          const t = Number(seek.value);
+          this.position = t;
+          if (curEl) curEl.textContent = fmtClockTime(t);
+        });
+        seek.addEventListener('change', () => {
+          if (!this.active) return;
+          const t = Number(seek.value);
+          this.command(['seek', t, 'absolute']).finally(() => { this.seeking = false; });
+        });
+      }
     },
 
     syncControls() {
-      if (!this._els) return;
-      this._els.playpause.innerHTML = this.paused ? '&#9658;' : '&#9208;';
-      this._els.cur.textContent = this._fmt(this.position);
-      this._els.dur.textContent = this._fmt(this.duration);
-      if (!this.seeking && this.duration > 0) {
-        this._els.seek.value = String(Math.round((this.position / this.duration) * 1000));
+      setPlayIcon(!this.paused);
+      const els = this._seekEls;
+      if (els && els.seek && !this.seeking) {
+        els.seek.max = String(Math.floor(this.duration || 0));
+        els.seek.value = String(Math.floor(this.position || 0));
       }
-      this._els.volume.value = String(Math.round(this.volume));
+      if (els && els.curEl) els.curEl.textContent = fmtClockTime(this.position || 0);
+      if (els && els.durEl) els.durEl.textContent = fmtClockTime(this.duration || 0);
+      const vol = $('#vol');
+      if (vol && document.activeElement !== vol) vol.value = String(Math.round(this.volume));
+      setMuteIcon(this.volume <= 0);
     },
 
     togglePause() {
       const next = !this.paused;
       this.paused = next;
-      this.syncControls();
+      setPlayIcon(!next);
       try { window.xtream.mpv2SetProperty('pause', next); } catch (e) {}
+    },
+
+    setVolume(v) {
+      this.volume = v;
+      try { window.xtream.mpv2SetProperty('volume', v); } catch (e) {}
+    },
+
+    seekRelative(deltaSeconds) {
+      this.command(['seek', deltaSeconds, 'relative']);
+    },
+
+    setSpeed(rate) {
+      try { window.xtream.mpv2SetProperty('speed', rate); } catch (e) {}
+    },
+
+    // --- audio/subtitle tracks, sourced from libmpv's `track-list` property
+    // (observed in main.js) and exposed through the same track-menu UI as
+    // the in-app player via getVodAudioTracks/getVodSubtitleTracks below.
+    getAudioTracks() {
+      const list = (this.tracks || []).filter((t) => t && t.type === 'audio');
+      return list.map((t) => ({
+        id: t.id, label: t.title || t.lang || ('Track ' + t.id),
+        active: !!t.selected,
+        select: () => { try { window.xtream.mpv2SetProperty('aid', t.id); } catch (e) {} }
+      }));
+    },
+    getSubtitleTracks() {
+      const list = (this.tracks || []).filter((t) => t && t.type === 'sub');
+      if (!list.length) return [];
+      const out = [{
+        // mpv's `sid` is a track-id/string property, not a boolean flag — it
+        // must be set to the string "no" to disable subtitles (sending
+        // `false` gets rejected as MPV_FORMAT_FLAG with the wrong property
+        // type and silently no-ops, which is why "Off" looked unwired).
+        id: 'off', label: 'Off', active: !list.some((t) => t.selected),
+        select: () => { try { window.xtream.mpv2SetProperty('sid', 'no'); } catch (e) {} }
+      }];
+      list.forEach((t) => out.push({
+        id: t.id, label: t.title || t.lang || ('Subtitle ' + t.id),
+        active: !!t.selected,
+        select: () => { try { window.xtream.mpv2SetProperty('sid', t.id); } catch (e) {} }
+      }));
+      return out;
     },
 
     command(cmdArr) {
       try { return window.xtream.mpv2Command(cmdArr) || Promise.resolve(); }
       catch (e) { return Promise.resolve(); }
     },
+
+    // Frames now arrive over a dedicated zero-copy MessagePort (see
+    // preload.js + main.js setupMpv2FramePort) instead of the regular
+    // mpv2:event IPC channel — keeps the ~8MB/frame RGBA buffers from ever
+    // being structured-cloned. Same backpressure handling as before: stash
+    // only the latest frame and let rAF paint at most once per refresh.
+    onFramePortMessage(data) {
+      if (!data || data.type !== 'frame' || !this.active) return;
+      this._pendingFrame = data;
+      this.schedulePaint();
+    },
   };
 
-  // Tears down the keydown handler too (buildControls adds it).
-  const _mpv2TeardownBase = Mpv2.teardown.bind(Mpv2);
-  Mpv2.teardown = function () {
-    if (this._kbHandler) { try { document.removeEventListener('keydown', this._kbHandler); } catch (e) {} this._kbHandler = null; }
-    _mpv2TeardownBase();
-  };
+  // One-time listener: receive the mpv2 frame MessagePort that preload.js
+  // relays into the main world via window.postMessage(..., [port]) — a
+  // transfer, not a clone, so the port (and every ArrayBuffer sent over it
+  // afterward) reaches us with zero copying. The main process re-sends this
+  // on every page load (see did-finish-load in main.js), so this listener
+  // just needs to stay registered and swap in whichever port arrives latest.
+  window.addEventListener('message', (event) => {
+    if (event.data !== 'mpv2:frame-port') return;
+    const port = event.ports && event.ports[0];
+    if (!port) return;
+    if (Mpv2._framePort) { try { Mpv2._framePort.close(); } catch (e) {} }
+    Mpv2._framePort = port;
+    port.onmessage = (e) => Mpv2.onFramePortMessage(e.data);
+    port.start();
+  });
 
   function playVodUrl(url, title, entry) {
     teardownMpvWatch();
@@ -6576,20 +6870,26 @@
     if (VodTransport.skipTimer) { clearTimeout(VodTransport.skipTimer); VodTransport.skipTimer = null; }
     VodTransport.ffRate = 1; VodTransport.ffDir = 0;
     if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
-    try { State.player.video.playbackRate = 1; } catch (e) {}
+    if (Mpv2.active) Mpv2.setSpeed(1);
+    else try { State.player.video.playbackRate = 1; } catch (e) {}
   }
 
   // Skip ±10s on consecutive presses of the same direction; the increment grows
   // with each press in a row (10s, 20s, 30s, …) and resets after a short pause.
   function vodSkip(dir) {
-    const video = State.player && State.player.video;
-    if (!video) return;
+    const mpv2 = Mpv2.active;
+    const video = !mpv2 && State.player && State.player.video;
+    if (!mpv2 && !video) return;
     if (VodTransport.skipTimer) clearTimeout(VodTransport.skipTimer);
     if (VodTransport.skipDir === dir) { VodTransport.skipStreak += 1; }
     else { VodTransport.skipDir = dir; VodTransport.skipStreak = 1; }
     const amount = 10 * VodTransport.skipStreak;
-    const dur = video.duration || Infinity;
-    try { video.currentTime = Math.max(0, Math.min(dur, (video.currentTime || 0) + dir * amount)); } catch (e) {}
+    if (mpv2) {
+      Mpv2.seekRelative(dir * amount);
+    } else {
+      const dur = video.duration || Infinity;
+      try { video.currentTime = Math.max(0, Math.min(dur, (video.currentTime || 0) + dir * amount)); } catch (e) {}
+    }
     toast((dir > 0 ? '+' : '−') + amount + 's', 900);
     VodTransport.skipTimer = setTimeout(() => { VodTransport.skipDir = 0; VodTransport.skipStreak = 0; }, 1200);
   }
@@ -6605,6 +6905,9 @@
   }
 
   function initVodSeekBar() {
+    // Mpv2 binds + drives the same #vod-seek/#vod-time-* elements itself
+    // (see Mpv2.bindControls/syncControls) — nothing to wire to a <video>.
+    if (Mpv2.active) return;
     const video = State.player && State.player.video;
     const seek = $('#vod-seek');
     const curEl = $('#vod-time-cur');
@@ -6614,6 +6917,15 @@
     seek._vodBound = true;
     let scrubbing = false;
     const update = () => {
+      // These listeners are bound once per `<video>` element (`_vodBound`)
+      // and stay attached for the element's lifetime. If the embedded
+      // native player later takes over the SAME #vod-seek/#vod-time-* DOM
+      // elements (see Mpv2.bindControls), this stale `<video>`-driven
+      // `update()` keeps firing on its own timeupdate/loadedmetadata events
+      // and overwrites whatever Mpv2.syncControls() just wrote — which is
+      // what made the seek bar look "stuck"/not tracking the native
+      // player's actual position. Bail out whenever Mpv2 owns the controls.
+      if (Mpv2.active) return;
       if (scrubbing) return;
       const dur = video.duration || 0;
       if (dur > 0) {
@@ -6627,10 +6939,12 @@
     video.addEventListener('loadedmetadata', update);
     video.addEventListener('durationchange', update);
     seek.addEventListener('input', () => {
+      if (Mpv2.active) return; // Mpv2.bindControls owns these elements now
       scrubbing = true;
       if (curEl) curEl.textContent = fmtClockTime(Number(seek.value));
     });
     seek.addEventListener('change', () => {
+      if (Mpv2.active) return; // Mpv2.bindControls owns these elements now
       try { video.currentTime = Number(seek.value); } catch (e) {}
       scrubbing = false;
       update();
@@ -6655,6 +6969,7 @@
   }
 
   function getVodAudioTracks() {
+    if (Mpv2.active) return Mpv2.getAudioTracks();
     const player = State.player;
     if (player && player.hls && Array.isArray(player.hls.audioTracks) && player.hls.audioTracks.length) {
       return player.hls.audioTracks.map((t, i) => ({
@@ -6680,6 +6995,7 @@
   }
 
   function getVodSubtitleTracks() {
+    if (Mpv2.active) return Mpv2.getSubtitleTracks();
     const player = State.player;
     const list = [{ id: 'off', label: 'Off', active: true, select: () => {} }];
     if (player && player.hls && Array.isArray(player.hls.subtitleTracks) && player.hls.subtitleTracks.length) {
@@ -6754,10 +7070,14 @@
       audioBtn.classList.toggle('has-tracks', audioTracks.length > 0);
       subsBtn.classList.toggle('has-tracks', subTracks.length > 0);
     };
+    // Exposed so Mpv2 can re-run this when libmpv's `track-list` property
+    // updates (its tracks arrive asynchronously, unlike <video>'s).
+    VodTracks.refresh = refresh;
+
     // Track lists aren't available immediately on load — re-check once
     // metadata/manifest info comes in, plus shortly after in case HLS.js
     // parses its track lists slightly later.
-    const video = State.player && State.player.video;
+    const video = !Mpv2.active && State.player && State.player.video;
     if (video) {
       video.addEventListener('loadedmetadata', refresh, { once: true });
       setTimeout(refresh, 1500);
@@ -7447,6 +7767,14 @@
     // Cmd/Ctrl shortcuts
     if (e.metaKey || e.ctrlKey) {
       if (e.key === 'g' || e.key === 'G') { e.preventDefault(); setView('guide'); return; }
+      // Ctrl/Cmd+Shift+D — toggle the embedded native-player debug HUD/log
+      // (captures lifecycle, property-change, and frame-paint timing so the
+      // user can copy & share diagnostics for playback issues).
+      if (e.shiftKey && (e.key === 'd' || e.key === 'D') && Mpv2.active) {
+        e.preventDefault();
+        Mpv2.toggleDebug();
+        return;
+      }
       return;
     }
     if (e.altKey) return;
@@ -7475,7 +7803,7 @@
     }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dir = (e.key === 'ArrowRight') ? 1 : -1;
-      if (State.mode === 'vod' && State.view === 'player' && State.player && State.player.video) {
+      if (State.mode === 'vod' && State.view === 'player' && (Mpv2.active || (State.player && State.player.video))) {
         e.preventDefault();
         vodSkip(dir);
         return;
@@ -7500,6 +7828,12 @@
         return;
       }
     }
+    // Holding a key down fires a flood of synthetic keydown events
+    // (e.repeat=true). None of these single-press shortcuts make sense
+    // repeated — holding Space was toggling play/pause dozens of times a
+    // second, which in turn spammed setProperty('pause'/'volume') at the
+    // native player and could stall its event loop. Swallow repeats here.
+    if (e.repeat) { e.preventDefault(); return; }
     switch (e.key) {
       case ' ': e.preventDefault(); $('#btn-play').click(); break;
       case 'ArrowDown': e.preventDefault(); $('#btn-next').click(); break;
