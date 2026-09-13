@@ -52,7 +52,9 @@ jobs:
         run: |
           tag="v$VERSION"
           notes=$(cat <<'NOTES'
-          Unsigned Apple Silicon build. After dragging **Xtream TV** into Applications, clear the quarantine flag once:
+          Apple Silicon build, ad-hoc signed (not notarized by Apple). The first time you open it macOS will say it can't verify **Xtream TV** — click **Done**, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to "Xtream TV was blocked". Only needed once per install.
+
+          Or clear the quarantine flag from Terminal instead:
 
           ```
           xattr -dr com.apple.quarantine "/Applications/Xtream TV.app"

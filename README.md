@@ -33,7 +33,7 @@ npm run package:linux   # → dist/Xtream TV-0.1.0.AppImage
 
 The output appears in `dist/`. Move the `.app` / `.exe` / `.AppImage` wherever you'd put any other application.
 
-> macOS: unsigned builds will need to be opened the first time via Finder → right-click → Open (or run `xattr -dr com.apple.quarantine "/Applications/Xtream TV.app"`).
+> macOS: builds are ad-hoc signed, not notarized. The first time a downloaded copy is opened, macOS says it can't verify the app — click **Done**, then **System Settings → Privacy & Security → Open Anyway** (or run `xattr -dr com.apple.quarantine "/Applications/Xtream TV.app"`). If macOS instead says the app is **"damaged"**, the bundle's code signature is broken — check `codesign --verify --deep --strict "/Applications/Xtream TV.app"`; the `mac.identity: "-"` setting in `package.json` is what keeps it valid.
 
 ## Project layout
 
