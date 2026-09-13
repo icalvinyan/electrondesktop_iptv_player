@@ -1004,6 +1004,8 @@
   .bulk-row.ok   .br-status { color: var(--ok); }
   .bulk-row.fail { border-color: rgba(255,95,109,.25); }
   .bulk-row.fail .br-status { color: var(--danger); }
+  .bulk-row.warn { border-color: rgba(255,181,71,.3); }
+  .bulk-row.warn .br-status { color: var(--warn); }
   .bulk-row.pending .br-status { color: var(--muted); }
   .bulk-row input[type=checkbox] {
     width: 16px; height: 16px;
@@ -1231,6 +1233,7 @@
         <select id="bulk-filter-status">
           <option value="all">All</option>
           <option value="ok">Valid only</option>
+          <option value="warn">Unverified only</option>
           <option value="fail">Failed only</option>
         </select>
         <select id="bulk-sort">
@@ -1245,7 +1248,7 @@
 
       <div id="bulk-results" class="bulk-results hidden"></div>
       <div id="bulk-actions" class="bulk-actions hidden">
-        <button id="bulk-select-all" style="font-size:12px;">Select all</button>
+        <button id="bulk-select-all" style="font-size:12px;">Select all valid</button>
         <button id="bulk-deselect-all" style="font-size:12px;">Deselect all</button>
         <span id="bulk-summary" class="bulk-summary"></span>
         <button id="bulk-save-valid" class="primary" disabled>Save selected</button>
@@ -2240,7 +2243,7 @@
   // playlist loads fine but points at a dead stream server — which otherwise
   // only shows up as endless buffering. Desktop only (needs the main-process
   // fetch to read past CORS and cap the body). Never throws.
-  // → { verdict: 'ok' | 'unreachable' | 'http' | 'inconclusive', segmentUrl, netError, status }
+  // → { verdict: 'ok' | 'empty' | 'unreachable' | 'http' | 'inconclusive', segmentUrl, netError, status }
   async function probeFirstSegment(manifestUrl) {
     if (!(window.xtream && window.xtream.fetch)) return { verdict: 'inconclusive' };
     const get = (u) => window.xtream.fetch(u, { maxBytes: 65536, timeoutMs: 8000 });
@@ -2260,9 +2263,11 @@
         if (!uri) return { verdict: 'inconclusive' };
         if (/#EXT-X-STREAM-INF/.test(body)) { reqUrl = uri; r = await get(uri); continue; } // master → variant
         try {
-          const s = await window.xtream.fetch(uri, { statusOnly: true, timeoutMs: 5000 });
-          return s.ok ? { verdict: 'ok', segmentUrl: uri }
-                      : { verdict: 'http', status: s.status, segmentUrl: uri };
+          // Read the first KB rather than just the headers: a server can answer
+          // 200 and then send nothing (dead backend behind a restreaming panel).
+          const s = await window.xtream.fetch(uri, { maxBytes: 1024, timeoutMs: 6000, binary: true });
+          if (!s.ok) return { verdict: 'http', status: s.status, segmentUrl: uri };
+          return { verdict: s.body && s.body.length ? 'ok' : 'empty', segmentUrl: uri };
         } catch (e) {
           const netError = netErrorCode(e);
           return { verdict: UNREACHABLE_NET_ERRORS.has(netError) ? 'unreachable' : 'inconclusive',
@@ -3111,23 +3116,13 @@
               rowStates[i].info = 'Checking streams…';
               updateRow(i);
               const check = await checkStreams(api, i);
-              if (check.refused) {
-                rowStates[i].status = 'fail';
-                rowStates[i].info = '✗ HTTP 456 — server refuses streams';
-              } else if (check.unreachable) {
-                rowStates[i].status = 'fail';
-                rowStates[i].info = '✗ Streams unreachable — ' + check.unreachable;
-              } else if (check.segmentUnreachable) {
-                const seg = check.segmentUnreachable;
-                rowStates[i].status = 'fail';
-                rowStates[i].info = '✗ Stream server unreachable — playlists load but ' +
-                  (safeHost(seg.segmentUrl) || 'the video server') + ' won\'t connect' +
-                  (seg.netError ? ' (' + seg.netError.replace(/^net::/, '') + ')' : '');
-              } else {
-                rowStates[i].status = 'ok';
-                const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
-                rowStates[i].info = '✓ Valid' + (u.status ? ' · ' + u.status : '') + expLabel + check.note;
-              }
+              const expLabel = expDate ? ' · exp ' + expDate.toLocaleDateString() : '';
+              rowStates[i].status = check.status;
+              rowStates[i].info = check.status === 'ok'
+                ? '✓ Valid · plays' + (u.status ? ' · ' + u.status : '') + expLabel
+                : check.status === 'warn'
+                  ? '⚠ Unverified — ' + check.reason + expLabel
+                  : '✗ ' + check.reason;
             }
             rowStates[i].server = { ...parsedRows[i] };
           } catch(e) {
@@ -3150,23 +3145,24 @@
       renderBulkResults();
     }
 
-    // Some servers pass player_api.php auth but answer every stream request
-    // with HTTP 456. Probe up to three distinct channels (first/middle/last)
-    // and stop at the first decisive answer: 456 → refused, 2xx/3xx → fine.
-    // A 2xx playlist is then followed to its first segment: if that segment's
-    // server is unreachable (connection refused, DNS, timeout) the channel
-    // counts as dead and the next pick is tried; when every playlist that
-    // loaded points at an unreachable server, the row fails — the classic
-    // "playlist loads, video buffers forever" provider outage.
-    // Anything else (dead channel 404, max-connections 403/458…) is shown as
-    // a note but doesn't fail the row. If none of the playlists answer at all,
-    // the row fails as unreachable.
+    // Decides whether an account can actually play — by proof, not by the
+    // absence of errors. Probes up to three distinct channels (first/middle/
+    // last) and follows each 2xx playlist to its first segment:
+    //   ok   — a segment delivered data, so the player will play this account.
+    //   fail — definitive: 456 or 401 on the playlists (logs in, but may not
+    //          stream), or the playlists / their segment server are unreachable.
+    //   warn — couldn't prove it either way: 403/404/429/458/5xx (often the
+    //          connection cap or dead channels), the channel list wouldn't
+    //          download, or the segment sent nothing. Not auto-selected.
+    // Stops at the first channel that plays.
+    // → { status: 'ok' | 'warn' | 'fail', reason }
     async function checkStreams(api, i) {
+      const cleanErr = e => String((e && e.message) || e || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      const unverified = why => ({ status: 'warn', reason: 'couldn\'t verify playback — ' + why });
       let streams;
       // The channel list is a multi-MB download and this panel allows only one
       // connection, so under load the fetch can transiently fail (reset/429/
-      // timeout). Retry a few times with backoff before giving up as skipped —
-      // otherwise a working account looks like "stream check skipped".
+      // timeout). Retry a few times with backoff before giving up.
       let lastListErr = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt) await new Promise(r => setTimeout(r, 800 * attempt));
@@ -3174,42 +3170,61 @@
         catch (e) { lastListErr = e; }
       }
       if (!streams) {
-        const msg = String((lastListErr && lastListErr.message) || lastListErr || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-        return { refused: false, note: ' · stream check skipped' + (msg ? ' (' + msg + ')' : '') };
+        const msg = cleanErr(lastListErr);
+        return unverified('channel list didn\'t download' + (msg ? ' (' + msg + ')' : ''));
       }
       rowStates[i].channelCount = streams.length;
-      if (!streams.length) return { refused: false, note: ' · stream check skipped (no channels)' };
+      if (!streams.length) return unverified('no live channels');
 
       const picks = new Map();
       for (const s of [streams[0], streams[Math.floor(streams.length / 2)], streams[streams.length - 1]]) {
         if (s && s.stream_id != null) picks.set(String(s.stream_id), s);
       }
-      let lastStatus = null, lastError = null, segmentUnreachable = null;
+      const statuses = [];
+      let lastError = null, segmentUnreachable = null, segmentProblem = null;
       for (const s of picks.values()) {
         let status;
         try { status = await api.probeStream(s); }
         catch (e) { lastError = e; continue; }
-        if (status === 456) return { refused: true, note: '' };
+        if (status === 456) return { status: 'fail', reason: 'HTTP 456 — server refuses streams' };
         if (status >= 200 && status < 400) {
           rowStates[i].info = 'Checking stream server…';
           updateRow(i);
           const seg = await api.probeSegment(s);
-          if (seg.verdict === 'unreachable') { segmentUnreachable = seg; continue; }
-          return { refused: false, note: seg.verdict === 'http' ? ' · segment check: HTTP ' + seg.status : '' };
+          if (seg.verdict === 'ok') return { status: 'ok', reason: '' };
+          if (seg.verdict === 'unreachable') segmentUnreachable = seg;
+          else segmentProblem = seg;
+          continue;
         }
-        lastStatus = status;
+        statuses.push(status);
       }
       // A playlist that loaded but points at a dead segment server is the most
       // decisive answer — the player would buffer forever on it.
-      if (segmentUnreachable) return { refused: false, segmentUnreachable, note: '' };
-      if (lastStatus != null) return { refused: false, note: ' · stream check: HTTP ' + lastStatus };
-      // No channel answered at all (TLS/DNS/connection error or timeout):
-      // the player would hit the same wall, so don't report the row as valid.
-      if (lastError) {
-        const msg = String(lastError.message || lastError).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-        return { refused: false, unreachable: msg };
+      if (segmentUnreachable) {
+        const seg = segmentUnreachable;
+        return { status: 'fail', reason: 'Stream server unreachable — playlists load but ' +
+          (safeHost(seg.segmentUrl) || 'the video server') + ' won\'t connect' +
+          (seg.netError ? ' (' + seg.netError.replace(/^net::/, '') + ')' : '') };
       }
-      return { refused: false, note: ' · stream check skipped' };
+      // 401 on a stream request is per-account: it logs in to the API but
+      // isn't allowed to play (the most common "valid but nothing plays" case).
+      if (statuses.includes(401)) {
+        return { status: 'fail', reason: 'HTTP 401 — account logs in but isn\'t allowed to play streams' };
+      }
+      if (segmentProblem) {
+        return unverified(segmentProblem.verdict === 'http' ? 'video segments answered HTTP ' + segmentProblem.status
+          : segmentProblem.verdict === 'empty' ? 'video server sent no data'
+          : 'couldn\'t read a channel playlist');
+      }
+      if (statuses.length) {
+        const last = statuses[statuses.length - 1];
+        const hint = [403, 429, 458, 509].includes(last) ? ' — connection limit reached?' : last === 404 ? ' — channels offline?' : '';
+        return unverified('playlists answered HTTP ' + last + hint);
+      }
+      // No channel answered at all (TLS/DNS/connection error or timeout):
+      // the player would hit the same wall.
+      if (lastError) return { status: 'fail', reason: 'Streams unreachable — ' + cleanErr(lastError) };
+      return unverified('no channel could be probed');
     }
 
     // ---- sort/filter toolbar ----
@@ -3224,6 +3239,7 @@
 
       // filter
       if (filterVal === 'ok')   indices = indices.filter(i => rowStates[i].status === 'ok');
+      if (filterVal === 'warn') indices = indices.filter(i => rowStates[i].status === 'warn');
       if (filterVal === 'fail') indices = indices.filter(i => rowStates[i].status === 'fail');
 
       // sort
@@ -3239,7 +3255,7 @@
 
       if (sortVal === 'status') {
         indices.sort((a, b) => {
-          const order = { ok: 0, pending: 1, fail: 2 };
+          const order = { ok: 0, warn: 1, pending: 2, fail: 3 };
           return (order[rowStates[a].status] ?? 1) - (order[rowStates[b].status] ?? 1);
         });
       } else if (sortVal === 'expiry') {
@@ -3282,9 +3298,11 @@
       const iconOk   = `<svg class="br-icon" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg>`;
       const iconFail = `<svg class="br-icon" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
       const iconWait = `<svg class="br-icon" viewBox="0 0 24 24" fill="none" stroke="var(--dim)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
-      const icon = state.status === 'ok' ? iconOk : state.status === 'fail' ? iconFail : iconWait;
+      const iconWarn = `<svg class="br-icon" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><path d="M12 3 2 20h20z"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="12" y1="17" x2="12" y2="17.5"/></svg>`;
+      const icon = state.status === 'ok' ? iconOk : state.status === 'fail' ? iconFail : state.status === 'warn' ? iconWarn : iconWait;
       const displayName = row.name || row.username;
-      const canCheck = state.status === 'ok';
+      // Unverified rows can be picked by hand; only proven-playable ones are pre-selected.
+      const canCheck = state.status === 'ok' || state.status === 'warn';
       const checked = state.checked ? 'checked' : '';
       const disabled = canCheck ? '' : 'disabled';
       const metaChips = state.apiData ? buildRowMetaChips(state.apiData, state.channelCount) : '';
@@ -3350,7 +3368,6 @@
       const el = $('#bulk-row-' + i);
       if (el) el.classList.toggle('selected', cb.checked);
       syncSaveButton();
-      updateSelectAllLabel();
     });
 
     // select-all / deselect-all
@@ -3381,11 +3398,13 @@
 
     function updateSummary() {
       const ok   = rowStates.filter(r => r.status === 'ok').length;
+      const warn = rowStates.filter(r => r.status === 'warn').length;
       const fail = rowStates.filter(r => r.status === 'fail').length;
       const pend = rowStates.filter(r => r.status === 'pending').length;
       let parts = [];
       if (pend) parts.push(`${pend} testing…`);
       if (ok)   parts.push(`${ok} valid`);
+      if (warn) parts.push(`${warn} unverified`);
       if (fail) parts.push(`${fail} failed`);
       summary.textContent = parts.join(' · ');
     }
