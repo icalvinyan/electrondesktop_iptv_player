@@ -5,13 +5,14 @@
 // =====================================================================
 'use strict';
 
-const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog, net } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, ipcMain, dialog, MessageChannelMain, net: electronNet } = require('electron');
 const path  = require('node:path');
 const fs    = require('node:fs');
 const http  = require('node:http');
 const https = require('node:https');
 const tls   = require('node:tls');
 const dgram = require('node:dgram');
+const net   = require('node:net');
 const dns   = require('node:dns');
 const os    = require('node:os');
 const { execFile, spawn } = require('node:child_process');
@@ -143,6 +144,26 @@ function startLocalTranscodeStream(sourceUrl, { copyVideo = false } = {}) {
         '-x264-params', 'repeat_headers=1:bframes=0',
       ];
 
+  // NOTE: this path is the renderer's "local transcode" fallback for HEVC
+  // video / undecodable audio, used by both Live TV channels and VOD. VOD sources are
+  // debrid-resolved cached-torrent files — typically large remuxed .mkv with
+  // multiple audio/subtitle/attachment streams and big Matroska headers — which
+  // behave very differently from the small, steady Live TV channel feeds that
+  // `startTranscodeStream` above is tuned for. A few VOD-specific adjustments:
+  //   • Smaller `-analyzeduration`/`-probesize` so ffmpeg starts producing HLS
+  //     segments (and the playlist) sooner — the renderer was timing out with
+  //     "manifestLoadError" because the playlist file didn't exist yet by the
+  //     time HLS.js tried to fetch it.
+  //   • `?` on the stream maps so a missing/odd-indexed audio track (common in
+  //     multi-audio-track rips) doesn't make ffmpeg exit immediately with no
+  //     output at all.
+  //   • `-sn -dn` to explicitly drop subtitle/data streams from the mux —
+  //     mkv rips often carry these and they can confuse `-f hls` muxing.
+  //   • `-max_muxing_queue_size` to absorb the bursty packet interleaving that
+  //     large mkv remuxes can produce (a very common cause of ffmpeg aborting
+  //     part-way through with "Too many packets buffered for output stream").
+  //   • `-tune zerolatency` (in videoArgs) is kept for Live TV, which shares
+  //     this path; it does little for VOD remuxes but isn't harmful there.
   const proc = spawn(ffBin, [
     '-loglevel', 'error',
     '-user_agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -150,6 +171,8 @@ function startLocalTranscodeStream(sourceUrl, { copyVideo = false } = {}) {
     '-reconnect', '1',
     '-reconnect_streamed', '1',
     '-reconnect_delay_max', '5',
+    '-analyzeduration', '3000000',
+    '-probesize', '5000000',
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
     '-i', sourceUrl,
@@ -157,11 +180,13 @@ function startLocalTranscodeStream(sourceUrl, { copyVideo = false } = {}) {
     // audio explicitly; '?' lets channels missing one of them still start.
     '-map', '0:v:0?',
     '-map', '0:a:0?',
+    '-sn', '-dn',
     ...videoArgs,
     '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', '48000',
     '-ac', '2',
+    '-max_muxing_queue_size', '4096',
     '-f', 'hls',
     '-hls_time', '2',
     '-hls_list_size', '10',
@@ -691,13 +716,13 @@ function startCastProxyServer() {
       // Poll briefly for the playlist to appear (ffmpeg may not have written it yet).
       // Guard every write with res.headersSent to prevent double-write if two
       // setTimeout callbacks race each other to the same response object.
-      const tryRead = (attemptsLeft) => {
+      const tryRead = (attemptsLeft, delayMs) => {
         if (res.headersSent) return;
         fs.readFile(filePath, (err, data) => {
           if (res.headersSent) return;
           if (err) {
             if (attemptsLeft > 0 && err.code === 'ENOENT') {
-              setTimeout(() => tryRead(attemptsLeft - 1), 300);
+              setTimeout(() => tryRead(attemptsLeft - 1, delayMs), delayMs);
             } else {
               res.writeHead(404); res.end();
             }
@@ -712,7 +737,13 @@ function startCastProxyServer() {
           res.end(data);
         });
       };
-      tryRead(m[1].endsWith('.m3u8') ? 10 : 3); // playlist: wait up to 3s; segments: 0.9s
+      // VOD sources are large remote debrid-resolved files (often .mkv with
+      // big headers) — ffmpeg can take noticeably longer than a Live TV channel
+      // feed to probe the input and write its first playlist/segment. 3s wasn't
+      // enough and the resulting 404s surfaced in the renderer as a fatal
+      // "manifestLoadError" before ffmpeg ever got a chance to catch up.
+      // Give the playlist up to ~24s and segments up to ~6s before giving up.
+      tryRead(m[1].endsWith('.m3u8') ? 80 : 20, m[1].endsWith('.m3u8') ? 300 : 300);
     });
   });
 }
@@ -786,8 +817,48 @@ function createWindow() {
   // Always allow Picture-in-Picture and fullscreen
   win.webContents.on('select-bluetooth-device', (e, _devices, cb) => { e.preventDefault(); cb(''); });
 
+  // Hand the renderer one end of a MessagePort dedicated to mpv2 video
+  // frames. Frames travel over this port (not webContents.send) with
+  // ArrayBuffers in the *transfer* list — see setupMpv2FramePort() for why.
+  // Re-established on every load/reload since a fresh page has no port.
+  win.webContents.on('did-finish-load', () => setupMpv2FramePort(win));
+
   win.loadURL(`http://127.0.0.1:${_rendererPort}/`);
   mainWindow = win;
+}
+
+// One end of a dedicated MessageChannel used solely to ship raw video frames
+// from the mpv addon to the renderer's <canvas>.
+//
+// Why not webContents.send('mpv2:event', frame)? Electron's regular IPC
+// (ipcMain/ipcRenderer/webContents.send) always *copies* the payload via its
+// own structured-clone serialization when crossing the main<->renderer
+// boundary — there is no way to mark a Buffer/ArrayBuffer as transferable on
+// that path. At ~28fps * ~8MB/frame that's ~200MB/s of allocation + copy
+// churn, which was ballooning V8's heap until macOS SIGKILLed the process
+// (confirmed against mpv2-debug logs showing exactly that throughput).
+//
+// MessagePortMain (the Electron flavor of the standard Web MessagePort),
+// once handed to the renderer, behaves like a normal Worker postMessage
+// channel: passing an ArrayBuffer in the second "transfer list" argument
+// *moves* ownership of its backing memory instead of cloning it — the same
+// zero-copy mechanism browsers use to ship large buffers between threads.
+// The addon now allocates each frame as a malloc'd ArrayBuffer (see
+// mpv_addon.cc RenderFrame), so the whole pipeline — native render -> JS
+// object -> renderer paint — involves exactly zero copies of the pixel data.
+let _mpv2FramePort = null;
+function setupMpv2FramePort(win) {
+  try {
+    if (_mpv2FramePort) { try { _mpv2FramePort.close(); } catch (_) {} _mpv2FramePort = null; }
+    const { port1, port2 } = new MessageChannelMain();
+    _mpv2FramePort = port1;
+    _mpv2FramePort.start();
+    win.webContents.postMessage('mpv2:frame-port', null, [port2]);
+    mpv2Log('mpv2 frame MessagePort (re)established');
+  } catch (e) {
+    mpv2Log('setupMpv2FramePort failed:', e.message);
+    _mpv2FramePort = null;
+  }
 }
 
 // ---------- nuke CORS/origin headers on outgoing requests ----------
@@ -818,73 +889,177 @@ function configureNetwork() {
   });
 }
 
+// ---------- Cloudflare "Attention Required" / JS-challenge bypass ----------
+// Some stream-scraper addons (Torrentio, AIOStreams mirrors, etc.) sit behind
+// Cloudflare's bot-protection, which returns a 403 + an interstitial page that
+// runs a JS challenge before issuing a `cf_clearance` cookie. A plain HTTP
+// request can't execute that JS — but Electron already ships a full Chromium,
+// so we spin up a hidden BrowserWindow, let it load the page (Chromium solves
+// the challenge automatically), and the resulting cf_clearance cookie lands in
+// the *shared* session cookie jar — so the very next session.fetch() call from
+// netFetch sails through. This is effectively a built-in FlareSolverr.
+const _cfSolveInFlight = new Map(); // origin -> Promise, to dedupe concurrent solves
+function looksLikeCloudflareChallenge(status, body) {
+  if (status !== 403 && status !== 503) return false;
+  const b = (body || '').slice(0, 4000);
+  return /cloudflare/i.test(b) && (
+    /attention required/i.test(b) ||
+    /just a moment/i.test(b) ||
+    /cf-browser-verification/i.test(b) ||
+    /challenge-platform/i.test(b) ||
+    /checking your browser/i.test(b)
+  );
+}
+async function solveCloudflareChallenge(url, log) {
+  const origin = new URL(url).origin;
+  if (_cfSolveInFlight.has(origin)) return _cfSolveInFlight.get(origin);
+  const p = (async () => {
+    log && log('Cloudflare challenge detected for ' + origin + ' — solving with a hidden browser window…');
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: { session: session.defaultSession, sandbox: true },
+    });
+    try {
+      await win.loadURL(url, { userAgent: FAKE_UA });
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        let title = '';
+        try { title = await win.webContents.executeJavaScript('document.title'); } catch (e) {}
+        const challenged = /just a moment|attention required|checking your browser/i.test(title || '');
+        if (!challenged) {
+          // Give Chromium a brief moment to finish setting the clearance cookie
+          // after the challenge page redirects/reloads.
+          await new Promise(r => setTimeout(r, 1200));
+          log && log('Cloudflare challenge cleared for ' + origin);
+          return true;
+        }
+        await new Promise(r => setTimeout(r, 800));
+      }
+      log && log('Timed out waiting for Cloudflare challenge to clear for ' + origin);
+      return false;
+    } catch (e) {
+      log && log('Error while solving Cloudflare challenge for ' + origin + ': ' + (e.message || e));
+      return false;
+    } finally {
+      try { win.destroy(); } catch (e) {}
+      _cfSolveInFlight.delete(origin);
+    }
+  })();
+  _cfSolveInFlight.set(origin, p);
+  return p;
+}
+
 // ---------- IPC: native fetch (used by renderer for big M3U downloads) ----------
 // Uses Electron's session fetch (Chromium network stack) so cookies set by
 // manifest/playlist responses are automatically sent on subsequent segment requests.
 const STATUS_ONLY_TIMEOUT_MS = 10000;
 async function netFetch(url, opts = {}) {
-  try { new URL(url); } catch (e) { throw new Error('Invalid URL: ' + url); }
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch (e) { throw new Error('Invalid URL: ' + url); }
+
+  // Chromium's modern fetch()/Request implementation (undici-backed) throws
+  // "Request cannot be constructed from a URL that includes credentials" for
+  // any "scheme://user:pass@host" URL — and several IPTV providers hand out
+  // exactly that shape (e.g. http://tvappapk@line.dino.ws/...). Strip the
+  // userinfo out of the URL ourselves and translate it into a standard HTTP
+  // Basic Authorization header instead, which is what the server actually
+  // expects either way.
+  let cleanUrl = url;
+  const authHeaders = {};
+  if (parsedUrl.username || parsedUrl.password) {
+    const user = decodeURIComponent(parsedUrl.username || '');
+    const pass = decodeURIComponent(parsedUrl.password || '');
+    authHeaders['Authorization'] = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+    parsedUrl.username = '';
+    parsedUrl.password = '';
+    cleanUrl = parsedUrl.toString();
+  }
+
   const headers = {
     'User-Agent': FAKE_UA,
     'Accept': '*/*',
+    ...authHeaders,
     ...(opts.headers || {}),
   };
   // opts.timeoutMs overrides the default (the renderer's segment probe fails fast).
   const timeoutMs = opts.timeoutMs > 0 ? opts.timeoutMs : STATUS_ONLY_TIMEOUT_MS;
-  if (opts.maxBytes > 0) return netFetchCapped(url, headers, opts.maxBytes, timeoutMs, opts.binary);
-  // statusOnly: resolve as soon as headers arrive and never read the body —
-  // a live .m3u8 may redirect to an endless .ts stream. The controller
-  // enforces the headers timeout and then closes the request.
-  let controller = null, timer = null, timedOut = false;
-  if (opts.statusOnly) {
-    controller = new AbortController();
-    timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-  }
-  // Use Electron session fetch — shares Chromium cookie jar and goes through
-  // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
-  let res;
-  try {
-    res = await session.defaultSession.fetch(url, {
-      method: opts.method || 'GET',
-      headers,
-      body: opts.body,
-      signal: controller ? controller.signal : undefined,
-    });
-  } catch (e) {
-    if (timedOut) throw new Error(`Timed out after ${timeoutMs / 1000}s`);
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-  const headerObj = {};
-  res.headers.forEach((v, k) => { headerObj[k] = v; });
-  if (opts.statusOnly) {
-    // Abort rather than res.body.cancel(): Electron's session.fetch keeps the
-    // underlying request open and reading after cancel(). Nothing reads the
-    // body, so the abort doesn't surface as a rejection.
-    controller.abort();
-    return { ok: res.ok, status: res.status, headers: headerObj, body: '' };
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
-  return {
-    ok: res.ok,
-    status: res.status,
-    headers: headerObj,
-    body,
+  // Probes (maxBytes / statusOnly) never read a full body, so they also skip
+  // the Cloudflare bypass below — a 403 on a probe must not open a solver window.
+  if (opts.maxBytes > 0) return netFetchCapped(cleanUrl, headers, opts.maxBytes, timeoutMs, opts.binary);
+  const doFetch = async () => {
+    // statusOnly: resolve as soon as headers arrive and never read the body —
+    // a live .m3u8 may redirect to an endless .ts stream. The controller
+    // enforces the headers timeout and then closes the request.
+    let controller = null, timer = null, timedOut = false;
+    if (opts.statusOnly) {
+      controller = new AbortController();
+      timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+    }
+    // Use Electron session fetch — shares Chromium cookie jar and goes through
+    // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
+    let res;
+    try {
+      res = await session.defaultSession.fetch(cleanUrl, {
+        method: opts.method || 'GET',
+        headers,
+        body: opts.body,
+        signal: controller ? controller.signal : undefined,
+      });
+    } catch (e) {
+      if (timedOut) throw new Error(`Timed out after ${timeoutMs / 1000}s`);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+    const headerObj = {};
+    res.headers.forEach((v, k) => { headerObj[k] = v; });
+    if (opts.statusOnly) {
+      // Abort rather than res.body.cancel(): Electron's session.fetch keeps the
+      // underlying request open and reading after cancel(). Nothing reads the
+      // body, so the abort doesn't surface as a rejection.
+      controller.abort();
+      return { ok: res.ok, status: res.status, headers: headerObj, body: '' };
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
+    return { ok: res.ok, status: res.status, headers: headerObj, body };
   };
+
+  let result = await doFetch();
+
+  // If we hit a Cloudflare interstitial and the caller hasn't opted out, try to
+  // solve it once with a hidden browser window, then retry the request.
+  if (!opts.noCfBypass && !opts.statusOnly && looksLikeCloudflareChallenge(result.status, result.body)) {
+    netLog(`Cloudflare interstitial detected for ${url} (status ${result.status}) — attempting bypass…`);
+    const solved = await solveCloudflareChallenge(url, netLog);
+    if (solved) {
+      netLog(`Bypass reported success for ${new URL(url).origin} — retrying original request…`);
+      result = await doFetch();
+      netLog(`Retry after bypass: ${url} → status ${result.status}`);
+      if (!result.ok) {
+        netLog(`Bypass did not actually unblock the request — still got status ${result.status}. ` +
+               `This usually means the site is using an interactive/managed challenge (CAPTCHA) ` +
+               `that can't be solved automatically, or it's blocking by IP/rate-limit rather than a JS puzzle.`);
+      }
+    } else {
+      netLog(`Bypass failed/timed out for ${new URL(url).origin} — the challenge likely requires ` +
+             `human interaction (CAPTCHA) or the block isn't a solvable JS challenge.`);
+    }
+  }
+
+  return result;
 }
 
 // GET that reads at most maxBytes of the body (a live .m3u8 can redirect to an
 // endless .ts stream) and reports the final URL after redirects, which the
-// renderer needs to resolve relative segment paths. Uses net.request because
+// renderer needs to resolve relative segment paths. Uses Electron's net.request because
 // session.fetch leaves Response.url empty and hangs with redirect: 'manual'.
 // Same session, so the onBeforeSendHeaders hooks and cookie jar still apply.
 function netFetchCapped(url, headers, maxBytes, timeoutMs, binary) {
   return new Promise((resolve, reject) => {
     let finalUrl = url, size = 0, settled = false, status = 0, headerObj = {};
     const chunks = [];
-    const req = net.request({ url, session: session.defaultSession, useSessionCookies: true, redirect: 'manual' });
+    const req = electronNet.request({ url, session: session.defaultSession, useSessionCookies: true, redirect: 'manual' });
     for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
     const done = () => {
       const buf = Buffer.concat(chunks).subarray(0, maxBytes);
@@ -1192,6 +1367,18 @@ function castLog(...args) {
   console.log('[Cast]', msg);
   if (mainWindow && !mainWindow.isDestroyed()) {
     try { mainWindow.webContents.send('cast:log', msg); } catch(_) {}
+  }
+}
+
+// ---- Net/Cloudflare-bypass debug logger — forwards to renderer DevTools ----
+// Main-process console.log only goes to the launching terminal, which most
+// users never see. Forward these lines to the renderer's DevTools console too
+// (prefixed "[netFetch]") so they show up in the same place as "[VOD]" logs
+// and in any exported console log the user sends us.
+function netLog(msg) {
+  console.log('[netFetch]', msg);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('net:log', String(msg)); } catch(_) {}
   }
 }
 
@@ -1737,6 +1924,436 @@ ipcMain.handle('cast:isConnected', ()                           => !!_castSocket
 // Local transcode — lets the renderer play HEVC/AC-3 streams by routing through ffmpeg→HLS
 ipcMain.handle('local:startTranscode', (_e, url, opts) => startLocalTranscodeStream(url, opts || {}));
 ipcMain.handle('local:stopTranscode',  () => stopLocalTranscodeStream());
+
+// ---------- VOD native player (mpv) ----------
+// The browser <video>/HLS.js/ffmpeg-remux pipeline above works, but it can't
+// give VOD playback what it really needs: native demuxing of .mkv containers,
+// every audio codec torrent rips carry (DTS/TrueHD/AC-3/E-AC-3/Atmos), and
+// styled subtitle rendering (ASS/SSA/PGS) — browsers fundamentally can't do
+// any of that, full stop, transcoding workarounds notwithstanding.
+//
+// mpv (built on libmpv/FFmpeg's decoders, plus libass for subtitles) handles
+// all of it natively, with proper audio-clock A/V sync and instant track
+// switching — exactly the "Playback Engine" layer recommended for a desktop
+// app. True pixel-level embedding of mpv's video surface *inside* the Electron
+// BrowserWindow would require a native windowing addon (parenting an external
+// process's window handle into a Chromium layer — there's no off-the-shelf,
+// cross-platform way to do this from Node/Electron without writing native
+// code per-OS). Instead we launch mpv as its own native window — still a
+// fully "embedded"-feeling experience for the user (it opens instantly over
+// the app, title-barred as part of Xtream TV, and closes back to the library
+// on quit/EOF) — and drive it from our own VOD overlay via mpv's JSON IPC
+// socket, so play/pause/seek/volume/track-selection all stay inside our UI.
+let _mpvBin     = undefined; // undefined = not checked yet, false = not found, string = path
+let _mpvProc    = null;
+let _mpvSocket  = null;      // net.Socket — JSON IPC connection
+let _mpvSockPath = null;
+let _mpvReqId   = 1;
+let _mpvPending = new Map(); // request_id -> { resolve, reject, timer }
+let _mpvConnectAttempt = 0;
+
+function findMpv() {
+  if (_mpvBin !== undefined) return _mpvBin;
+  const candidates = process.platform === 'darwin'
+    ? ['/opt/homebrew/bin/mpv', '/usr/local/bin/mpv', '/Applications/mpv.app/Contents/MacOS/mpv']
+    : process.platform === 'win32'
+    ? ['C:\\Program Files\\mpv\\mpv.exe', 'C:\\ProgramData\\chocolatey\\bin\\mpv.exe']
+    : ['/usr/bin/mpv', '/usr/local/bin/mpv', '/snap/bin/mpv'];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) { _mpvBin = c; castProxyLog(`[mpv] found at ${c}`); return _mpvBin; } } catch(_) {}
+  }
+  try {
+    const out = require('node:child_process')
+      .execSync(process.platform === 'win32' ? 'where mpv' : 'command -v mpv', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })
+      .trim().split(/\r?\n/)[0];
+    if (out && fs.existsSync(out)) { _mpvBin = out; castProxyLog(`[mpv] found on PATH at ${out}`); return _mpvBin; }
+  } catch (_) {}
+  castProxyLog('[mpv] not found — install it (e.g. `brew install mpv`) for native VOD playback (proper .mkv/DTS/subtitle support)');
+  _mpvBin = false;
+  return false;
+}
+
+function notifyMpvEvent(payload) {
+  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('mpv:event', payload);
+  }
+}
+
+function closeMpvSocket() {
+  if (_mpvSocket) { try { _mpvSocket.destroy(); } catch(_) {} _mpvSocket = null; }
+  for (const { reject, timer } of _mpvPending.values()) { clearTimeout(timer); try { reject(new Error('mpv connection closed')); } catch(_){} }
+  _mpvPending.clear();
+  _mpvSockPath = null;
+}
+
+function stopMpv() {
+  closeMpvSocket();
+  if (_mpvProc) {
+    try { _mpvProc.kill(); } catch(_) {}
+    _mpvProc = null;
+  }
+}
+
+function connectMpvSocket(sockPath) {
+  _mpvConnectAttempt = 0;
+  const tryConnect = () => {
+    _mpvConnectAttempt += 1;
+    const sock = net.connect(sockPath);
+    let buf = '';
+    sock.on('connect', () => {
+      _mpvSocket = sock;
+      castProxyLog('[mpv] IPC socket connected');
+      // Subscribe to the properties the renderer's overlay needs to mirror.
+      ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
+       'track-list', 'sub-text', 'eof-reached', 'playback-time', 'seeking']
+        .forEach((prop, i) => {
+          try { sock.write(JSON.stringify({ command: ['observe_property', i + 1, prop] }) + '\n'); } catch(_){}
+        });
+      notifyMpvEvent({ event: 'xtream-connected' });
+    });
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch (e) { continue; }
+        if (msg && msg.request_id != null && _mpvPending.has(msg.request_id)) {
+          const p = _mpvPending.get(msg.request_id);
+          _mpvPending.delete(msg.request_id);
+          clearTimeout(p.timer);
+          if (msg.error && msg.error !== 'success') p.reject(new Error(msg.error));
+          else p.resolve(msg.data !== undefined ? msg.data : msg);
+        } else if (msg && msg.event) {
+          notifyMpvEvent(msg);
+        }
+      }
+    });
+    sock.on('error', () => {
+      // mpv may not have created the socket yet — retry briefly.
+      if (_mpvConnectAttempt < 40 && _mpvProc) setTimeout(tryConnect, 150);
+    });
+    sock.on('close', () => {
+      if (_mpvSocket === sock) _mpvSocket = null;
+    });
+  };
+  tryConnect();
+}
+
+function sendMpvCommand(cmdArr) {
+  return new Promise((resolve, reject) => {
+    if (!_mpvSocket) { reject(new Error('mpv not connected')); return; }
+    const id = _mpvReqId++;
+    const timer = setTimeout(() => {
+      if (_mpvPending.has(id)) { _mpvPending.delete(id); reject(new Error('mpv command timed out')); }
+    }, 6000);
+    _mpvPending.set(id, { resolve, reject, timer });
+    try {
+      _mpvSocket.write(JSON.stringify({ command: cmdArr, request_id: id }) + '\n');
+    } catch (e) {
+      _mpvPending.delete(id);
+      clearTimeout(timer);
+      reject(e);
+    }
+  });
+}
+
+// Launches mpv against a VOD URL, in its own native window with a JSON IPC
+// socket for control. Returns { ok:true } or { ok:false, reason }.
+function startMpvPlayback(url, title) {
+  stopMpv();
+  const bin = findMpv();
+  if (!bin) return { ok: false, reason: 'not-found' };
+
+  const sockPath = process.platform === 'win32'
+    ? ('\\\\.\\pipe\\xtream-mpv-' + process.pid + '-' + Date.now())
+    : path.join(os.tmpdir(), `xtream-mpv-${process.pid}-${Date.now()}.sock`);
+
+  if (process.platform !== 'win32') { try { fs.unlinkSync(sockPath); } catch(_) {} }
+
+  const args = [
+    `--input-ipc-server=${sockPath}`,
+    '--force-window=yes',
+    '--idle=yes',
+    '--keep-open=yes',
+    '--autofit-larger=100%x100%',
+    '--title=' + (title ? `${title} — Xtream TV` : 'Xtream TV — Now Playing'),
+    '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    // Subtitle/OSD niceties — mpv demuxes embedded ASS/SRT/PGS tracks itself.
+    '--sub-auto=fuzzy',
+    '--osc=yes',
+    url,
+  ];
+  castProxyLog(`[mpv] launching: ${bin} (socket=${sockPath})`);
+  let proc;
+  try {
+    proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (e) {
+    castProxyLog(`[mpv] spawn failed: ${e.message}`);
+    return { ok: false, reason: 'spawn-failed', message: e.message };
+  }
+  _mpvProc = proc;
+  _mpvSockPath = sockPath;
+
+  proc.stderr && proc.stderr.on('data', d => castProxyLog(`[mpv] ${d.toString().trim()}`));
+  proc.on('error', e => {
+    castProxyLog(`[mpv] process error: ${e.message}`);
+    if (_mpvProc === proc) { _mpvProc = null; closeMpvSocket(); notifyMpvEvent({ event: 'xtream-error', message: e.message }); }
+  });
+  proc.on('exit', (code, sig) => {
+    castProxyLog(`[mpv] exited code=${code} signal=${sig}`);
+    if (_mpvProc === proc) {
+      _mpvProc = null;
+      closeMpvSocket();
+      notifyMpvEvent({ event: 'xtream-closed', code, signal: sig });
+    }
+  });
+
+  // Give mpv a brief head start to create the socket file before connecting.
+  setTimeout(() => connectMpvSocket(sockPath), 250);
+  return { ok: true };
+}
+
+ipcMain.handle('mpv:available', () => !!findMpv());
+ipcMain.handle('mpv:play', (_e, url, title) => startMpvPlayback(url, title));
+ipcMain.handle('mpv:command', (_e, cmdArr) => sendMpvCommand(cmdArr));
+ipcMain.handle('mpv:stop', () => { stopMpv(); return true; });
+
+app.on('before-quit', () => { try { stopMpv(); } catch(_) {} });
+
+// ---------- VOD native player — embedded libmpv (in-window) ----------
+// This is the "true embedding" path: native/mpv-addon wraps libmpv's client +
+// software-render API in an N-API addon, decoding/rendering frames in-process
+// and handing us RGBA buffers we forward straight to the renderer to paint
+// onto a <canvas> — actually inside the app window, not a separate process's
+// window like the external-`mpv` path above (which stays as the no-build-step
+// fallback when this addon hasn't been compiled on the user's machine; see
+// native/mpv-addon/BUILD.md for how to build/bundle it).
+let _mpvAddon = null;
+function loadMpvAddon() {
+  if (_mpvAddon !== null) return _mpvAddon;
+  try {
+    _mpvAddon = require('./native/mpv-addon');
+    if (_mpvAddon.available) castProxyLog('[mpv2] embedded libmpv addon loaded');
+    else castProxyLog(`[mpv2] embedded libmpv addon not built: ${_mpvAddon.error}`);
+  } catch (e) {
+    castProxyLog(`[mpv2] failed to load addon: ${e.message}`);
+    _mpvAddon = { available: false, error: e.message, MpvPlayer: null };
+  }
+  return _mpvAddon;
+}
+
+let _mpvPlayer = null; // native MpvPlayer instance for the active VOD session
+
+// ---- mpv2 debug instrumentation ----
+// Toggle with env var MPV2_DEBUG=1 (or set _mpv2Debug = true at runtime via
+// the `mpv2:debug` IPC below). Frame payloads are extremely high-frequency,
+// so they're summarized into a rolling fps/size counter and logged once a
+// second rather than per-frame, while every other event (property-change,
+// log-message, lifecycle, errors) is logged immediately with a timestamp —
+// this is what lets us see, e.g., whether `pause`/`time-pos` events are
+// actually arriving (autoplay/seek-bar symptoms) and whether frame delivery
+// is steady or bursty (stutter/spinner symptoms).
+let _mpv2Debug = process.env.MPV2_DEBUG === '1';
+let _mpv2FrameStats = { count: 0, bytes: 0, windowStart: 0 };
+let _mpv2LastLogAt = 0;
+// Each frame is a multi-MB raw RGBA Buffer that has to be structured-cloned
+// across the main↔renderer IPC boundary — that serialization runs on the
+// main process's thread (the same thread Electron uses to pump the native
+// event loop), so forwarding every frame the addon produces can saturate it
+// and make the whole app — cursor, menus, window dragging — appear frozen
+// system-wide, independent of anything the renderer does with the frame
+// afterward. Cap forwarding to ~30fps (mpv already renders at ~28fps in
+// steady state, so this is a no-op then) and silently drop any extra frames
+// that arrive during bursts instead of queuing IPC sends.
+const MPV2_MAX_FRAME_FORWARD_HZ = 30;
+let _mpv2LastFrameForwardAt = 0;
+
+function mpv2Log(...args) {
+  if (!_mpv2Debug) return;
+  const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+  castProxyLog(`[mpv2-debug ${ts}]`, ...args);
+}
+
+function notifyMpv2(payload) {
+  if (_mpv2Debug && payload) {
+    if (payload.type === 'frame' || payload.frame || payload.buffer || ArrayBuffer.isView(payload)) {
+      // Frame-ish payload — summarize via a 1s rolling counter instead of
+      // logging every single one (these can arrive 30-60x/sec).
+      const now = Date.now();
+      if (!_mpv2FrameStats.windowStart) _mpv2FrameStats.windowStart = now;
+      _mpv2FrameStats.count += 1;
+      try {
+        const buf = payload.buffer || payload.data || payload;
+        if (buf && typeof buf.length === 'number') _mpv2FrameStats.bytes += buf.length;
+        else if (buf && typeof buf.byteLength === 'number') _mpv2FrameStats.bytes += buf.byteLength;
+      } catch (_) {}
+      const elapsed = now - _mpv2FrameStats.windowStart;
+      if (elapsed >= 1000) {
+        const fps = (_mpv2FrameStats.count / (elapsed / 1000)).toFixed(1);
+        const kbps = (_mpv2FrameStats.bytes / 1024 / (elapsed / 1000)).toFixed(0);
+        mpv2Log(`frames: ${_mpv2FrameStats.count} in ${elapsed}ms (~${fps} fps, ~${kbps} KB/s)`);
+        _mpv2FrameStats = { count: 0, bytes: 0, windowStart: now };
+      }
+    } else if (payload.type === 'property-change' && payload.name === 'time-pos') {
+      // time-pos fires ~10-15x/sec during normal playback — far too noisy to
+      // log every occurrence now that the pipeline is confirmed healthy.
+      // Throttle to roughly once per second so we can still see it's alive.
+      const now = Date.now();
+      if (now - _mpv2LastLogAt >= 1000) {
+        _mpv2LastLogAt = now;
+        mpv2Log('event ->', JSON.stringify(payload));
+      }
+    } else {
+      // Non-frame, non-time-pos events (pause, duration, seeking, log-message,
+      // end-file, etc.) — these are low-frequency and the most useful for
+      // diagnosing playback-state symptoms, so log every one immediately.
+      try { mpv2Log('event ->', JSON.stringify(payload)); }
+      catch (_) { mpv2Log('event -> [unserializable]', payload && payload.type); }
+    }
+  }
+  if (payload && payload.type === 'frame') {
+    const now = Date.now();
+    const minInterval = 1000 / MPV2_MAX_FRAME_FORWARD_HZ;
+    if (_mpv2LastFrameForwardAt && now - _mpv2LastFrameForwardAt < minInterval) {
+      return; // drop — too soon since the last forwarded frame
+    }
+    _mpv2LastFrameForwardAt = now;
+
+    // Ship frames over the dedicated zero-copy MessagePort, transferring
+    // (not cloning) the backing ArrayBuffer the addon just malloc'd. This is
+    // the whole point of setupMpv2FramePort() — see its comment for the full
+    // rationale (avoids the ~200MB/s structured-clone churn that was
+    // OOM/SIGKILL-ing the app).
+    if (_mpv2FramePort) {
+      const buf = payload.buffer;
+      try {
+        _mpv2FramePort.postMessage(
+          { type: 'frame', width: payload.width, height: payload.height, stride: payload.stride, buffer: buf },
+          buf instanceof ArrayBuffer ? [buf] : []
+        );
+      } catch (e) {
+        mpv2Log('frame port postMessage failed:', e.message);
+      }
+      return; // never falls through to webContents.send for frames
+    }
+    // No port yet (e.g. very first frame before did-finish-load fired) —
+    // drop it rather than structured-clone-copying it through the slow path.
+    return;
+  }
+  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('mpv2:event', payload);
+  }
+}
+
+function closeMpv2() {
+  mpv2Log('closeMpv2()', _mpvPlayer ? '(destroying active player)' : '(no active player)');
+  if (_mpvPlayer) {
+    try { _mpvPlayer.destroy(); } catch (e) { mpv2Log('destroy() threw:', e.message); }
+    _mpvPlayer = null;
+  }
+  _mpv2FrameStats = { count: 0, bytes: 0, windowStart: 0 };
+}
+
+function openMpv2(url, title, surfaceW, surfaceH) {
+  const t0 = Date.now();
+  mpv2Log(`openMpv2() url=${url} title=${title || ''} surface=${surfaceW || '?'}x${surfaceH || '?'}`);
+  const addon = loadMpvAddon();
+  if (!addon.available || !addon.MpvPlayer) {
+    mpv2Log('openMpv2() addon unavailable:', addon.error);
+    return { ok: false, reason: 'not-built', message: addon.error };
+  }
+
+  closeMpv2();
+  try {
+    _mpvPlayer = new addon.MpvPlayer((payload) => {
+      // Frame buffers arrive as Node Buffers — forward as-is; structured
+      // clone turns them into Uint8Array on the renderer side, which the
+      // canvas surface wraps in a Uint8ClampedArray for putImageData with
+      // zero extra copies.
+      notifyMpv2(payload);
+    });
+    mpv2Log(`MpvPlayer constructed in ${Date.now() - t0}ms`);
+    if (surfaceW && surfaceH) {
+      _mpvPlayer.setSurfaceSize(surfaceW, surfaceH);
+      mpv2Log(`setSurfaceSize(${surfaceW}, ${surfaceH})`);
+    }
+    // Properties the renderer's overlay needs to mirror playback state —
+    // mirrors the set the external-mpv IPC path observes for parity.
+    const props = ['pause', 'time-pos', 'duration', 'volume', 'mute', 'speed',
+     'track-list', 'sub-text', 'eof-reached', 'seeking', 'core-idle'];
+    props.forEach(p => {
+      try {
+        const rc = _mpvPlayer.observeProperty(p);
+        // mpv_observe_property returns a negative mpv_error code on failure —
+        // the addon used to discard this, which would let a silent
+        // registration failure masquerade as "events just don't arrive".
+        if (typeof rc === 'number' && rc < 0) mpv2Log(`observeProperty('${p}') returned error code ${rc}`);
+      } catch (e) { mpv2Log(`observeProperty('${p}') failed:`, e.message); }
+    });
+    mpv2Log('observing properties:', props.join(', '));
+    _mpvPlayer.loadFile(url);
+    mpv2Log(`loadFile() issued — total open() time so far ${Date.now() - t0}ms`);
+    castProxyLog(`[mpv2] embedded playback started: ${title || url}`);
+    return { ok: true };
+  } catch (e) {
+    castProxyLog(`[mpv2] open failed: ${e.message}`);
+    mpv2Log('openMpv2() threw:', e.message, e.stack || '');
+    closeMpv2();
+    return { ok: false, reason: 'error', message: e.message };
+  }
+}
+
+ipcMain.handle('mpv2:available', () => !!loadMpvAddon().available);
+ipcMain.handle('mpv2:open', (_e, url, title, w, h) => openMpv2(url, title, w, h));
+// Lets the renderer flip verbose mpv2 logging on/off at runtime (instead of
+// requiring the MPV2_DEBUG=1 env var + relaunch) — wired to a "Debug" toggle
+// in the player overlay so the user can capture logs around a live repro.
+ipcMain.handle('mpv2:debug', (_e, enabled) => {
+  _mpv2Debug = !!enabled;
+  castProxyLog(`[mpv2] debug logging ${_mpv2Debug ? 'ENABLED' : 'disabled'}`);
+  return _mpv2Debug;
+});
+ipcMain.handle('mpv2:command', (_e, cmdArr) => {
+  if (!_mpvPlayer) {
+    mpv2Log('command() with no active player:', JSON.stringify(cmdArr));
+    return Promise.reject(new Error('no active embedded player'));
+  }
+  const t0 = Date.now();
+  mpv2Log('command ->', JSON.stringify(cmdArr));
+  return _mpvPlayer.command(cmdArr).then((res) => {
+    mpv2Log(`command <- ok in ${Date.now() - t0}ms:`, JSON.stringify(cmdArr), '=>', JSON.stringify(res));
+    return res;
+  }).catch((e) => {
+    mpv2Log(`command <- FAILED in ${Date.now() - t0}ms:`, JSON.stringify(cmdArr), 'error:', e.message);
+    throw e;
+  });
+});
+ipcMain.handle('mpv2:setProperty', (_e, name, value) => {
+  mpv2Log(`setProperty('${name}', ${JSON.stringify(value)})`, _mpvPlayer ? '' : '(NO ACTIVE PLAYER — dropped)');
+  if (_mpvPlayer) {
+    try {
+      const rc = _mpvPlayer.setProperty(name, value);
+      if (typeof rc === 'number' && rc < 0) mpv2Log(`setProperty('${name}', ${JSON.stringify(value)}) returned error code ${rc}`);
+    } catch (e) { mpv2Log(`setProperty('${name}') threw:`, e.message); }
+  }
+  return true;
+});
+ipcMain.handle('mpv2:getProperty', (_e, name) => {
+  const v = _mpvPlayer ? _mpvPlayer.getProperty(name) : null;
+  mpv2Log(`getProperty('${name}') ->`, JSON.stringify(v));
+  return v;
+});
+ipcMain.handle('mpv2:setSurfaceSize', (_e, w, h) => {
+  mpv2Log(`setSurfaceSize(${w}, ${h})`, _mpvPlayer ? '' : '(NO ACTIVE PLAYER — dropped)');
+  if (_mpvPlayer) _mpvPlayer.setSurfaceSize(w, h);
+  return true;
+});
+ipcMain.handle('mpv2:close', () => { closeMpv2(); return true; });
+
+app.on('before-quit', () => { try { closeMpv2(); } catch(_) {} });
 
 // ---------- application menu ----------
 function buildMenu() {

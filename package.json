@@ -28,15 +28,21 @@
       "main.js",
       "preload.js",
       "renderer/**",
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "native/mpv-addon/index.js",
+      "native/mpv-addon/build/Release/*.node",
+      "native/mpv-addon/bin/**",
+      "native/mpv-addon/vendor/lib/**"
     ],
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "native/mpv-addon/**"
     ],
     "mac": {
       "target": { "target": "dmg", "arch": ["arm64"] },
       "category": "public.app-category.video",
-      "identity": null,
+      "identity": "-",
+      "hardenedRuntime": false,
       "notarize": false
     },
     "win": {

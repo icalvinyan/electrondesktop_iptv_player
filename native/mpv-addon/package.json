@@ -1,0 +1,19 @@
+{
+  "name": "mpv-addon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "N-API native addon embedding libmpv (client + software-render API) for true in-window VOD playback in Xtream TV.",
+  "main": "index.js",
+  "gypfile": true,
+  "scripts": {
+    "build": "node-gyp rebuild",
+    "clean": "node-gyp clean",
+    "rebuild": "node-gyp rebuild --verbose"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.1.0"
+  }
+}

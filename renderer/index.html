@@ -135,6 +135,53 @@
   .form-error { color: var(--danger); font-size:12px; margin-top:6px; min-height:14px; }
   .form-ok    { color: var(--ok);     font-size:12px; margin-top:6px; min-height:14px; }
 
+  /* ----------- Mode launcher (Live TV vs VOD) ----------- */
+  #mode-launcher {
+    position:fixed; inset:0; z-index: 65; display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(900px 600px at 80% -20%, rgba(91,140,255,.15), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(122,162,255,.10), transparent 60%),
+      var(--bg-0);
+  }
+  #mode-launcher.hidden { display:none !important; }
+  /* While the launcher is up, keep the Live TV shell out of the layout so its
+     sidebar/observers/EPG lookups don't fire before the user picks a mode. */
+  #mode-launcher:not(.hidden) ~ #app .main { display:none !important; }
+  .launcher-card {
+    width: min(820px, 95vw);
+    text-align:center;
+  }
+  .launcher-card h1 {
+    margin:0 0 6px; font-size:26px; letter-spacing:.2px;
+    display:flex; align-items:center; justify-content:center; gap:10px;
+  }
+  .launcher-card .sub { color: var(--muted); font-size:14px; margin-bottom:28px; }
+  .launcher-modes { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }
+  .launcher-mode-btn {
+    width: min(320px, 100%);
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border:1px solid var(--line); border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 28px 20px;
+    cursor:pointer;
+    transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    color: var(--text);
+  }
+  .launcher-mode-btn:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+  }
+  .launcher-mode-btn .icon {
+    width:56px; height:56px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background: rgba(91,140,255,.12); color: var(--accent-2);
+  }
+  .launcher-mode-btn .icon svg { width:28px; height:28px; }
+  .launcher-mode-btn .title { font-size:17px; font-weight:700; }
+  .launcher-mode-btn .desc { font-size:12.5px; color: var(--muted); line-height:1.4; }
+
   /* ----------- App shell ----------- */
   #app { display:none; height:100%; flex-direction:column; }
   #app.show { display:flex; }
@@ -160,6 +207,118 @@
     background: transparent; border:none; padding:6px 14px; border-radius: 999px; color: var(--muted); font-weight:500;
   }
   .nav-tabs button.active { background: var(--bg-4); color: var(--text); }
+
+  /* ---- VOD (Netflix-style) ---- */
+  /* Settings modal — Live TV and VOD settings are visually grouped (and
+     auto-expanded/collapsed based on the mode you're currently in) so the
+     two independent feature sets don't read as one big mixed list. */
+  .settings-group-title {
+    font-size:13px; font-weight:800; letter-spacing:0.3px; text-transform:uppercase;
+    color: var(--muted); margin-bottom:12px;
+  }
+  .settings-group-divider { height:1px; background: var(--line); margin:2px 0; }
+  .settings-group.dimmed { opacity:0.45; }
+
+  .vod-root { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+  .vod-hub { display:flex; gap:6px; padding:14px 20px 0; }
+  .vod-hub button {
+    background: transparent; border:none; padding:8px 16px; border-radius:999px;
+    color: var(--muted); font-weight:600; font-size:14px;
+  }
+  .vod-hub button.active { background: var(--bg-4); color: var(--text); }
+  /* When relocated into the top bar (VOD's primary nav), drop the content-area
+     padding and align it like Live TV's nav-tabs. */
+  .vod-hub.vod-hub-in-topbar { padding: 0; gap: 4px; }
+  .vod-hub.vod-hub-in-topbar button { padding: 8px 14px; font-size: 13px; }
+  .vod-spotlight {
+    position:relative; margin:16px 20px 18px; height:460px; border-radius:14px; overflow:hidden;
+    display:flex; align-items:flex-end; background: var(--bg-2); flex:none;
+  }
+  .vod-spotlight-bg {
+    position:absolute; inset:0; background-size:cover; background-position:center 20%;
+    filter:brightness(1.15);
+  }
+  .vod-spotlight-bg::after {
+    content:''; position:absolute; inset:0;
+    background: linear-gradient(to top, rgba(0,0,0,0.92) 8%, rgba(0,0,0,0.4) 50%, rgba(0,0,0,0.05) 78%),
+                linear-gradient(to right, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 55%);
+  }
+  .vod-spotlight-info {
+    position:relative; padding:32px 32px 40px; max-width:640px; max-height:100%;
+    display:flex; flex-direction:column; gap:10px; box-sizing:border-box; overflow:hidden;
+  }
+  .vod-spotlight-logo {
+    max-width:280px; max-height:84px; width:auto; height:auto; object-fit:contain;
+    object-position:left bottom; filter:drop-shadow(0 2px 14px rgba(0,0,0,0.65));
+    align-self:flex-start; margin-bottom:2px;
+  }
+  .vod-spotlight-title { font-size:26px; font-weight:800; text-shadow:0 2px 12px rgba(0,0,0,0.6); }
+  .vod-spotlight-meta {
+    font-size:13px; color:var(--muted); display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  }
+  .vod-spotlight-meta .stars { color:#f5c518; letter-spacing:1px; font-size:12px; }
+  .vod-spotlight-meta .pill {
+    border:1px solid rgba(255,255,255,0.35); border-radius:4px; padding:1px 7px;
+    font-size:11px; font-weight:700; color:var(--text); line-height:1.4;
+  }
+  .vod-spotlight-meta .dot { opacity:0.45; }
+  .vod-spotlight-meta .pill.release-status {
+    border-radius:999px; padding:2px 10px; letter-spacing:0.2px; font-weight:700;
+  }
+  .vod-spotlight-meta .pill.release-status.in-theaters {
+    border-color:#3ddc84; color:#3ddc84;
+  }
+  .vod-spotlight-meta .pill.release-status.on-digital {
+    border-color:#01b4e4; color:#01b4e4;
+  }
+  .vod-spotlight-overview {
+    font-size:13px; color:var(--text); opacity:0.85; line-height:1.5; max-width:560px;
+  }
+  .vod-spotlight-scores { display:flex; align-items:center; gap:18px; }
+  .vod-spotlight-scores .score {
+    display:flex; align-items:center; gap:7px; font-size:14px; font-weight:700; color:var(--text);
+  }
+  .vod-spotlight-scores .score-icon {
+    display:inline-flex; align-items:center; justify-content:center; flex:none;
+    width:22px; height:22px; border-radius:50%; font-size:11px; font-weight:800; line-height:1;
+  }
+  .vod-spotlight-scores .score-icon.tmdb { background:#0d253f; color:#01b4e4; border:1px solid #01b4e4; }
+  .vod-spotlight-scores .score-icon.percent { background:transparent; color:#3ddc84; border:2px solid #3ddc84; }
+  .vod-spotlight-actions { margin-top:4px; }
+  .vod-search-row { padding:16px 20px 0; }
+  .vod-search-row input { width:min(520px, 100%); }
+  .vod-rails {
+    display:flex; flex-direction:column; gap:14px; padding:0 20px 20px;
+    flex:1; min-height:0; overflow:hidden;
+  }
+  .vod-rail-title { font-size:16px; font-weight:700; margin-bottom:10px; }
+  .vod-tabbed-rail { display:flex; flex-direction:column; flex:1; min-height:0; }
+  .vod-rail-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; flex:none; }
+  .vod-rail-tabs button {
+    background: transparent; border:1px solid rgba(255,255,255,0.18); color:var(--muted);
+    border-radius:999px; padding:7px 16px; font-size:13px; font-weight:600; cursor:pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .vod-rail-tabs button:hover { color:var(--text); border-color:rgba(255,255,255,0.35); }
+  .vod-rail-tabs button.active { background: var(--text); color: var(--bg-1, #0b0d12); border-color: var(--text); }
+  .vod-rail-track {
+    display:flex; gap:12px; overflow-x:auto; overflow-y:hidden; padding-bottom:6px;
+    scroll-behavior:smooth; flex:1; min-height:0; align-items:flex-start;
+  }
+  .vod-card {
+    flex: 0 0 150px; cursor:pointer; transition: transform .15s ease;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .vod-card:hover, .vod-card:focus-visible { transform: scale(1.06); z-index:2; }
+  .vod-card-poster {
+    width:150px; height:225px; border-radius:8px; background-size:cover; background-position:center;
+    background-color: var(--bg-2); box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; text-align:center; padding:8px;
+  }
+  .vod-card-title { font-size:12px; color:var(--text); line-height:1.3; }
+  .vod-card-sub { font-size:11px; color:var(--muted); }
+  .vod-empty { color:var(--muted); padding:40px 20px; text-align:center; line-height:1.6; }
+  .vod-empty a { color:var(--accent); }
   .server-pill {
     display:flex; align-items:center; gap:8px; padding: 4px 8px 4px 10px;
     background: var(--bg-2); border:1px solid var(--line); border-radius: 999px;
@@ -467,8 +626,81 @@
     font-size:11px; padding:3px 8px; border-radius:999px; background: rgba(0,0,0,.45); color:#cfe0ff;
     display:flex; align-items:center; gap:6px;
   }
-  .player-overlay .status-badge .dot { width:8px; height:8px; border-radius:50%; background: var(--accent); animation: pulse 1.4s infinite; }
+  .player-overlay .status-badge .dot { width:8px; height:8px; border-radius:50%; background: var(--accent); }
   .player-overlay .status-badge.live .dot { background: var(--danger); }
+  /* VOD mode: hide live-TV-only chrome, show clearlogo + seek bar instead */
+  .player-overlay.vod-mode #ov-status,
+  .player-overlay.vod-mode #ov-num,
+  .player-overlay.vod-mode #signal-bars,
+  .player-overlay.vod-mode #btn-live,
+  .player-overlay.vod-mode #btn-guide,
+  .player-overlay.vod-mode #btn-fav,
+  .player-overlay.vod-mode #btn-copy-url,
+  .player-overlay.vod-mode #btn-full,
+  .player-overlay.vod-mode .ch-logo-wrap,
+  .player-overlay.vod-mode .ch-name,
+  .player-overlay.vod-mode .ch-now,
+  .player-overlay.vod-mode .ch-next { display: none !important; }
+  .player-overlay .ov-clearlogo {
+    display: none;
+    max-height: 64px; max-width: 260px; object-fit: contain;
+    filter: drop-shadow(0 2px 10px rgba(0,0,0,.5));
+  }
+  .player-overlay.vod-mode .ov-clearlogo[src] { display: block; }
+  .player-overlay.vod-mode #vod-seek-row { display: flex !important; }
+  .player-overlay.vod-mode #btn-vod-back,
+  .player-overlay.vod-mode #btn-audio-track,
+  .player-overlay.vod-mode #btn-subtitles { display: inline-flex !important; }
+  .player-overlay .ctl-btn.has-tracks { display: inline-flex !important; }
+  .player-overlay .ctl-btn.is-active { background: rgba(91,140,255,0.22); border-color: var(--accent-2); color: var(--accent-2); }
+  /* Floating time readout that follows the seek thumb while scrubbing */
+  .vod-scrub-time {
+    position: absolute; bottom: 100%; transform: translateX(-50%);
+    margin-bottom: 8px; padding: 3px 8px; border-radius: 6px;
+    background: rgba(0,0,0,.85); color:#fff; font-size:12px; font-weight:600;
+    font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+    display: none; z-index: 6;
+  }
+  .vod-scrub-time.show { display: block; }
+  .vod-scrub-preview {
+    position: absolute; bottom: 100%; transform: translateX(-50%);
+    margin-bottom: 34px; border-radius: 8px; overflow: hidden;
+    border: 2px solid rgba(255,255,255,.6); box-shadow: 0 6px 24px rgba(0,0,0,.6);
+    background: #000; display: none; pointer-events: none; z-index: 6;
+  }
+  .vod-scrub-preview.show { display: block; }
+  .vod-scrub-preview canvas { display:block; width:160px; height:90px; }
+  .vod-seek-row { position: relative; }
+  /* Track-picker popover for subtitles / audio track buttons */
+  .track-menu {
+    position: absolute; bottom: 56px; min-width: 180px; max-width: 280px;
+    background: rgba(20,24,34,.97); border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px; padding: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    z-index: 20; display: flex; flex-direction: column; gap: 2px;
+    max-height: 260px; overflow-y: auto;
+  }
+  .track-menu .track-item {
+    text-align:left; padding: 8px 10px; border-radius: 7px; border: none;
+    background: transparent; color: #dbe4f5; font-size: 13px; cursor: pointer;
+  }
+  .track-menu .track-item:hover { background: rgba(255,255,255,.08); }
+  .track-menu .track-item.active { background: rgba(91,140,255,.22); color: var(--accent-2); font-weight:600; }
+  .vod-seek-row { display:flex; align-items:center; gap:10px; margin: 0 0 10px; }
+  .vod-seek-row .vod-time { font-variant-numeric: tabular-nums; color:#cfe0ff; font-size:12px; min-width:46px; text-align:center; }
+  .vod-seek-row .vod-time.end { text-align:left; }
+  .vod-seek {
+    flex:1; appearance:none; -webkit-appearance:none; height:5px; border-radius:999px;
+    background: rgba(255,255,255,0.18); outline:none; cursor:pointer;
+    accent-color: var(--accent);
+  }
+  .vod-seek::-webkit-slider-thumb {
+    -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+    background: var(--accent); border: 2px solid #fff; cursor:pointer; margin-top:-1px;
+  }
+  .vod-seek::-moz-range-thumb {
+    width:14px; height:14px; border-radius:50%;
+    background: var(--accent); border: 2px solid #fff; cursor:pointer;
+  }
   /* Renamed from .guide-header to avoid colliding with the existing sticky in-grid
      header used by the channel column. */
   .guide-top-row {
@@ -549,7 +781,6 @@
   .guide-mini:hover .guide-mini-hint { opacity: 1; }
   .guide-top-row .guide-toolbar { flex: 1; min-width: 0; border-bottom: none; align-self: center; }
   #view-guide #guide-toolbar { display: none !important; }
-  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
   .player-empty {
     color: var(--muted); display:flex; flex-direction:column; align-items:center; gap:14px;
     text-align:center;
@@ -1086,8 +1317,11 @@
 <body>
 
 <!-- ========================== CONNECT SCREEN ========================== -->
-<div id="connect-screen">
+<div id="connect-screen" style="display:none;">
   <div class="connect-card">
+    <button id="btn-connect-back-to-launcher" class="icon-btn" title="Back to Live TV / VOD picker" style="float:right; margin-left:8px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+    </button>
     <h1><span class="logo-dot"></span> Xtream TV</h1>
     <div class="sub">Connect to your Xtream-compatible IPTV server to browse channels, watch live, and view the guide.</div>
     <div id="file-origin-warn" style="display:none; background:rgba(255,181,71,.12); border:1px solid rgba(255,181,71,.4); color:#ffd391; padding:10px 12px; border-radius:8px; margin: 4px 0 10px; font-size:12.5px; line-height:1.5;">
@@ -1272,12 +1506,42 @@
   </div>
 </div>
 
+<!-- ========================== MODE LAUNCHER ========================== -->
+<!-- Shown right after connecting; lets the user choose Live TV or VOD.    -->
+<!-- Switching modes fully tears down whichever mode is left so it stops  -->
+<!-- using CPU in the background (HLS players, EPG timers, lookups, etc). -->
+<div id="mode-launcher" class="hidden">
+  <div class="launcher-card">
+    <h1><span class="logo-dot"></span> What would you like to watch?</h1>
+    <div class="sub">Pick a mode to continue. You can switch any time — leaving a mode stops it completely so it won't keep running in the background.</div>
+    <div class="launcher-modes">
+      <button class="launcher-mode-btn" id="mode-btn-live" data-mode="live">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 3l4 3 4-3"/></svg>
+        </span>
+        <span class="title">Live TV</span>
+        <span class="desc">Channels, program guide, multi-view and favorites — your normal Xtream experience.</span>
+      </button>
+      <button class="launcher-mode-btn" id="mode-btn-vod" data-mode="vod">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M3 17l4-4 3 3 4-5 5 6"/><circle cx="9" cy="8" r="1.5" fill="currentColor" stroke="none"/></svg>
+        </span>
+        <span class="title">Video On Demand</span>
+        <span class="desc">Browse and stream movies &amp; shows with posters, ratings and metadata from TMDB.</span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ========================== MAIN APP ========================== -->
 <div id="app">
   <!-- Top bar -->
   <div class="topbar">
     <div class="brand"><span class="logo-dot"></span> Xtream TV</div>
-    <div class="sep"></div>
+    <button id="btn-switch-mode" class="icon-btn" title="Switch between Live TV and Video On Demand">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+    </button>
+    <div class="sep" id="server-pill-sep"></div>
     <div class="server-pill" id="server-pill" title="Switch server">
       <span class="dot"></span>
       <span class="name" id="server-pill-name">—</span>
@@ -1290,7 +1554,7 @@
       <button data-view="favorites">Favorites</button>
     </div>
     <div class="grow"></div>
-    <div class="search">
+    <div class="search" id="channel-search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input id="search-input" type="search" placeholder="Search channels…" />
     </div>
@@ -1351,6 +1615,11 @@
       <div class="player-area">
         <div class="player-wrap" id="player-wrap">
           <video id="video" playsinline></video>
+          <!-- Embedded libmpv surface: native/mpv-addon decodes+renders VOD
+               frames in-process (RGBA, software path) and streams them here
+               over IPC; we blit each one with putImageData. Hidden unless an
+               embedded-mpv session is active (see tryPlayVodWithMpv2). -->
+          <canvas id="mpv2-canvas" class="hidden" style="position:absolute; inset:0; width:100%; height:100%; background:#000;"></canvas>
           <div class="player-overlay" id="player-overlay">
             <div class="top">
               <div style="flex:1"></div>
@@ -1365,14 +1634,25 @@
                   <div class="ch-meta">
                     <span class="ch-num-pill" id="ov-num">—</span>
                     <span class="ch-name" id="ov-name">No channel selected</span>
+                    <img class="ov-clearlogo" id="ov-clearlogo" referrerpolicy="no-referrer" alt="" onerror="this.removeAttribute('src')">
                     <span id="ov-quality"></span>
                   </div>
                   <div class="ch-now" id="ov-now"></div>
                   <div class="ch-next" id="ov-next"></div>
                 </div>
               </div>
+              <div class="vod-seek-row" id="vod-seek-row" style="display:none">
+                <span class="vod-time" id="vod-time-cur">0:00</span>
+                <input type="range" class="vod-seek" id="vod-seek" min="0" max="1000" value="0" step="1">
+                <div class="vod-scrub-preview" id="vod-scrub-preview"><canvas id="vod-scrub-canvas" width="160" height="90"></canvas></div>
+                <div class="vod-scrub-time" id="vod-scrub-time">0:00</div>
+                <span class="vod-time end" id="vod-time-dur">0:00</span>
+              </div>
               <div class="controls-bar">
                 <div class="controls-left">
+                  <button id="btn-vod-back" class="ctl-btn" title="Back to library (Esc)" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 19l-7-7 7-7"/></svg>
+                  </button>
                   <span class="runtime-pill" id="ov-runtime">—:—</span>
                 </div>
                 <div class="controls-center">
@@ -1408,6 +1688,12 @@
                   <button id="btn-live" class="live-btn" title="Jump to live edge">● LIVE</button>
                   <button id="btn-guide" class="ctl-btn" title="Open the program guide (G or Cmd+G)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 4v16"/></svg>
+                  </button>
+                  <button id="btn-audio-track" class="ctl-btn" title="Audio track" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13" fill="none"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  </button>
+                  <button id="btn-subtitles" class="ctl-btn" title="Subtitles" style="display:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 13h3M7 10h6M14 13h3" stroke-linecap="round"/></svg>
                   </button>
 
                   <button id="btn-cast" class="ctl-btn" title="Cast">
@@ -1523,6 +1809,34 @@
         <div id="fav-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px;"></div>
       </div>
     </div>
+
+    <!-- VOD (Discover) view — Netflix-style movie/series browser -->
+    <div class="view" id="view-vod">
+      <div class="vod-root" id="vod-root">
+        <div class="vod-hub" id="vod-hub">
+          <button class="active" data-vod-section="movies">Movies</button>
+          <button data-vod-section="shows">Shows</button>
+          <button data-vod-section="search">Search</button>
+        </div>
+        <div class="vod-spotlight" id="vod-spotlight" style="display:none;">
+          <div class="vod-spotlight-bg" id="vod-spotlight-bg"></div>
+          <div class="vod-spotlight-info">
+            <img class="vod-spotlight-logo" id="vod-spotlight-logo" alt="" style="display:none;">
+            <div class="vod-spotlight-title" id="vod-spotlight-title"></div>
+            <div class="vod-spotlight-meta" id="vod-spotlight-meta"></div>
+            <div class="vod-spotlight-overview" id="vod-spotlight-overview"></div>
+            <div class="vod-spotlight-scores" id="vod-spotlight-scores"></div>
+            <div class="vod-spotlight-actions">
+              <button class="primary" id="vod-spotlight-play">▶ Play</button>
+            </div>
+          </div>
+        </div>
+        <div class="vod-search-row" id="vod-search-row" style="display:none;">
+          <input id="vod-search-input" type="search" placeholder="Search movies &amp; shows…" />
+        </div>
+        <div class="vod-rails" id="vod-rails"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1585,55 +1899,138 @@
       <button class="ghost" data-close="settings-modal">✕</button>
     </header>
     <section>
-      <div style="display:flex; flex-direction:column; gap:14px;">
-        <div>
-          <label>Default stream container</label>
-          <select id="s-container">
-            <option value="m3u8">HLS (m3u8)</option>
-            <option value="ts">MPEG-TS (.ts)</option>
-          </select>
-        </div>
-        <div>
-          <label>Hover preview</label>
-          <select id="s-preview">
-            <option value="on">On (after 700ms hover)</option>
-            <option value="slow">Slow (1.5s hover)</option>
-            <option value="off">Off</option>
-          </select>
-        </div>
-        <div>
-          <label>Autoplay next channel on stream error</label>
-          <select id="s-autonext">
-            <option value="off">Off</option>
-            <option value="on">On</option>
-          </select>
-        </div>
-        <div>
-          <label>Player controls opacity — <span id="s-overlay-opacity-val">100%</span></label>
-          <input type="range" id="s-overlay-opacity" min="10" max="100" step="5" value="100"
-            style="width:100%; accent-color:var(--accent);">
-        </div>
-        <div>
-          <label>Keyboard shortcuts</label>
-          <div style="display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:12px;">
-            <span><span class="kbd">Space</span> play/pause</span>
-            <span><span class="kbd">↑</span>/<span class="kbd">↓</span> change channel</span>
-            <span><span class="kbd">F</span> fullscreen</span>
-            <span><span class="kbd">M</span> mute</span>
-            <span><span class="kbd">/</span> search</span>
-            <span><span class="kbd">G</span> guide</span>
-            <span><span class="kbd">S</span> favorite</span>
+      <div style="display:flex; flex-direction:column; gap:18px;">
+
+        <!-- ============================================================
+             LIVE TV — settings that only apply to the Xtream/M3U side
+             (player/stream prefs, the connected server profile, and the
+             destructive "danger zone" actions for that server).
+        ============================================================ -->
+        <div class="settings-group" id="settings-group-live">
+          <div class="settings-group-title">📺 Live TV</div>
+          <div style="display:flex; flex-direction:column; gap:14px;">
+            <div>
+              <label>Default stream container</label>
+              <select id="s-container">
+                <option value="m3u8">HLS (m3u8)</option>
+                <option value="ts">MPEG-TS (.ts)</option>
+              </select>
+            </div>
+            <div>
+              <label>Hover preview</label>
+              <select id="s-preview">
+                <option value="on">On (after 700ms hover)</option>
+                <option value="slow">Slow (1.5s hover)</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <div>
+              <label>Autoplay next channel on stream error</label>
+              <select id="s-autonext">
+                <option value="off">Off</option>
+                <option value="on">On</option>
+              </select>
+            </div>
+            <div>
+              <label>Player controls opacity — <span id="s-overlay-opacity-val">100%</span></label>
+              <input type="range" id="s-overlay-opacity" min="10" max="100" step="5" value="100"
+                style="width:100%; accent-color:var(--accent);">
+            </div>
+            <div>
+              <label>Keyboard shortcuts</label>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:12px;">
+                <span><span class="kbd">Space</span> play/pause</span>
+                <span><span class="kbd">↑</span>/<span class="kbd">↓</span> change channel</span>
+                <span><span class="kbd">F</span> fullscreen</span>
+                <span><span class="kbd">M</span> mute</span>
+                <span><span class="kbd">/</span> search</span>
+                <span><span class="kbd">G</span> guide</span>
+                <span><span class="kbd">S</span> favorite</span>
+              </div>
+            </div>
+            <details class="section" id="server-profile-section">
+              <summary>Server profile</summary>
+              <div id="server-edit-area" style="margin-top:10px;"></div>
+            </details>
+            <details class="section">
+              <summary>Danger zone</summary>
+              <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button id="btn-disconnect">Disconnect</button>
+                <button class="danger" id="btn-forget">Forget this server</button>
+              </div>
+            </details>
           </div>
         </div>
+
+        <div class="settings-group-divider" id="settings-group-divider-mid"></div>
+
+        <!-- ============================================================
+             VIDEO ON DEMAND — settings for the standalone VOD layer.
+             Entirely independent of Xtream/M3U servers: Real-Debrid,
+             Trakt, TMDB-driven discovery, and stream "providers".
+        ============================================================ -->
+        <div class="settings-group" id="settings-group-vod">
+          <div class="settings-group-title">🎬 Video On Demand</div>
+          <details class="section" id="integrations-section" open>
+            <summary>VOD Integrations (Real-Debrid / Trakt)</summary>
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:14px;">
+              <div>
+                <label>Real-Debrid</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <span id="s-rd-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                  <button id="btn-rd-connect">Log in to Real-Debrid</button>
+                  <button id="btn-rd-disconnect" class="danger" style="display:none;">Disconnect</button>
+                </div>
+                <div id="s-rd-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
+              </div>
+              <div>
+                <label>Trakt (optional — unlocks personalized rails &amp; watch history)</label>
+                <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
+                  Connect your Trakt account by scanning a QR code or entering a short code at trakt.tv/activate — no password needed.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <span id="s-trakt-status" style="font-size:12px; color:var(--muted);">Not connected</span>
+                  <button id="btn-trakt-connect">Connect Trakt</button>
+                  <button id="btn-trakt-disconnect" class="danger" style="display:none;">Disconnect</button>
+                </div>
+                <div id="s-trakt-device-area" style="margin-top:8px; display:none; font-size:13px;"></div>
+              </div>
+              <div>
+                <label>Stream providers</label>
+                <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">
+                  This app has no scraper built in — to find playable links for movies &amp; shows, add
+                  "providers": any Stremio-addon-protocol source (a manifest URL or base URL), or a
+                  "repository" (a JSON list of multiple providers). Providers are tried in order from
+                  top to bottom; drag to reorder. Search online for "Stremio addons" to find sources to add.
+                </div>
+                <div id="provider-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"></div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                  <input id="s-provider-url" type="text" placeholder="Paste a provider manifest or base URL…" style="flex:1; min-width:220px;">
+                  <button id="btn-provider-add">Add provider</button>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <input id="s-repo-url" type="text" placeholder="Paste a repository URL (JSON list of providers)…" style="flex:1; min-width:220px;">
+                  <button id="btn-repo-add">Add from repository</button>
+                </div>
+                <div id="s-provider-status" style="font-size:12px; margin-top:6px;"></div>
+              </div>
+              <div>
+                <label>When multiple stream results are found</label>
+                <select id="s-autopick">
+                  <option value="off">Let me choose (default)</option>
+                  <option value="on">Auto-pick best stream</option>
+                </select>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="settings-group-divider"></div>
+
+        <!-- Shared, mode-agnostic actions -->
         <details class="section">
-          <summary>Server profile</summary>
-          <div id="server-edit-area" style="margin-top:10px;"></div>
-        </details>
-        <details class="section">
-          <summary>Danger zone</summary>
+          <summary>Danger zone — all data</summary>
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="btn-disconnect">Disconnect</button>
-            <button class="danger" id="btn-forget">Forget this server</button>
             <button class="danger" id="btn-clear-all">Clear all local data</button>
           </div>
         </details>
@@ -1732,6 +2129,92 @@
       }, this._data.settings || {});
       this._data.lastChannel     = this._data.lastChannel     || {};
       this._data.serverFavorites = this._data.serverFavorites || [];
+      this._data.integrations    = Object.assign({
+        realDebrid:    { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        trakt:         { enabled: false, accessToken: '', refreshToken: '', expiresAt: 0 },
+        autoPickStream: false,
+        vodWatched:    {},            // { [imdbId]: { progress, lastWatchedAt, ... } } — local watch history fallback
+        providers:     null,          // array of stream-provider entries (see _migrateProviders) — null until migrated
+      }, this._data.integrations || {});
+      // Defensive sub-merges in case of older partial saves
+      this._data.integrations.realDebrid = Object.assign(
+        { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        this._data.integrations.realDebrid || {}
+      );
+      this._data.integrations.trakt = Object.assign(
+        { enabled: false, clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 },
+        this._data.integrations.trakt || {}
+      );
+      this._migrateProviders();
+    },
+
+    // ---- Stream providers (Stremio-addon-protocol-compatible sources) ----
+    // The app ships with NO scraper hardcoded — users add their own provider
+    // sources (self-hosted or public Stremio addons) via Settings, the same
+    // way Cloudstream/Syncler/Weyd let users install "extensions"/"providers".
+    // One-time migration: older saves had a fixed `scraperSource: 'torrentio'
+    // | 'aiostreams'` setting. Convert whatever the user had selected into a
+    // single starter provider entry pointing at the URL they were already
+    // using, so upgrading doesn't silently leave them with zero sources. This
+    // is a per-user migration of THEIR prior choice — not a bundled default.
+    _migrateProviders() {
+      const integ = this._data.integrations;
+      if (Array.isArray(integ.providers)) return; // already migrated (possibly to an empty list — respect that)
+      const providers = [];
+      const prior = integ.scraperSource;
+      if (prior === 'aiostreams') {
+        providers.push(this._makeProvider('AIOStreams', 'https://aiostreams.elfhosted.com', 'migrated'));
+      } else if (prior === 'torrentio' || prior === undefined) {
+        // `undefined` covers brand-new installs prior to this migration shipping —
+        // still seed Torrentio's public URL as a starter so VOD isn't dead on
+        // first launch; the user can remove/replace it freely from Settings.
+        providers.push(this._makeProvider('Torrentio', 'https://torrentio.strem.fun', 'migrated'));
+      }
+      integ.providers = providers;
+      delete integ.scraperSource;
+    },
+    _makeProvider(name, baseUrl, source) {
+      const clean = String(baseUrl || '').replace(/\/+$/, '');
+      return {
+        id: 'p_' + Math.random().toString(36).slice(2, 10),
+        name: name || clean,
+        baseUrl: clean,
+        manifestUrl: clean + '/manifest.json',
+        enabled: true,
+        addedAt: Date.now(),
+        source: source || 'manual', // 'manual' | 'repo' | 'migrated'
+      };
+    },
+    getProviders() { return Array.isArray(this._data.integrations.providers) ? this._data.integrations.providers : []; },
+    getEnabledProviders() { return this.getProviders().filter(p => p && p.enabled); },
+    addProvider(name, baseUrl, source) {
+      const clean = String(baseUrl || '').replace(/\/+$/, '');
+      if (!clean) return null;
+      const list = this.getProviders();
+      const dupe = list.find(p => p.baseUrl === clean);
+      if (dupe) return dupe;
+      const p = this._makeProvider(name, clean, source);
+      list.push(p);
+      this._data.integrations.providers = list;
+      this.save();
+      return p;
+    },
+    removeProvider(id) {
+      this._data.integrations.providers = this.getProviders().filter(p => p.id !== id);
+      this.save();
+    },
+    setProviderEnabled(id, enabled) {
+      const p = this.getProviders().find(p => p.id === id);
+      if (p) { p.enabled = !!enabled; this.save(); }
+    },
+    reorderProviders(idsInOrder) {
+      const list = this.getProviders();
+      const byId = new Map(list.map(p => [p.id, p]));
+      const reordered = idsInOrder.map(id => byId.get(id)).filter(Boolean);
+      // Append anything not mentioned (defensive — keeps no entries from vanishing)
+      list.forEach(p => { if (!idsInOrder.includes(p.id)) reordered.push(p); });
+      this._data.integrations.providers = reordered;
+      this.save();
     },
     async load() {
       // Desktop: load from userData JSON file via IPC
@@ -1841,6 +2324,64 @@
       try { localStorage.removeItem(this.KEY); } catch(e){}
       this._data = null;
       this.load();
+    },
+
+    /* ---- VOD integrations (Real-Debrid / Trakt / scraper prefs) ---- */
+    integrations() { return this._data.integrations; },
+    setRealDebridKey(apiKey) {
+      this._data.integrations.realDebrid.apiKey = (apiKey || '').trim();
+      this.save();
+    },
+    getRealDebridKey() { return this._data.integrations.realDebrid.apiKey || ''; },
+    setRealDebridTokens(patch) {
+      Object.assign(this._data.integrations.realDebrid, patch);
+      this.save();
+    },
+    getRealDebrid() { return this._data.integrations.realDebrid; },
+    // Connected if we have either a pasted legacy API key OR a logged-in OAuth token.
+    isRealDebridConnected() {
+      const rd = this._data.integrations.realDebrid;
+      return !!(rd && (rd.accessToken || rd.apiKey));
+    },
+    disconnectRealDebrid() {
+      this._data.integrations.realDebrid = { apiKey: '', clientId: '', clientSecret: '', accessToken: '', refreshToken: '', expiresAt: 0 };
+      this.save();
+    },
+
+    setTraktTokens(patch) {
+      Object.assign(this._data.integrations.trakt, patch);
+      this.save();
+    },
+    getTrakt() { return this._data.integrations.trakt; },
+    isTraktConnected() {
+      const t = this._data.integrations.trakt;
+      return !!(t && t.enabled && t.accessToken);
+    },
+    disconnectTrakt() {
+      this._data.integrations.trakt = {
+        enabled: false, accessToken: '', refreshToken: '', expiresAt: 0
+      };
+      this.save();
+    },
+
+    getAutoPickStream() { return !!this._data.integrations.autoPickStream; },
+    setAutoPickStream(on) { this._data.integrations.autoPickStream = !!on; this.save(); },
+
+    rememberVodProgress(imdbId, patch) {
+      if (!imdbId) return;
+      const w = this._data.integrations.vodWatched;
+      w[imdbId] = Object.assign({ lastWatchedAt: Date.now() }, w[imdbId] || {}, patch, { lastWatchedAt: Date.now() });
+      this.save();
+    },
+    getVodProgress(imdbId) {
+      return (this._data.integrations.vodWatched || {})[imdbId] || null;
+    },
+    continueWatchingList(limit) {
+      const w = this._data.integrations.vodWatched || {};
+      return Object.keys(w)
+        .map(id => Object.assign({ imdbId: id }, w[id]))
+        .sort((a, b) => (b.lastWatchedAt||0) - (a.lastWatchedAt||0))
+        .slice(0, limit || 20);
     }
   };
 
@@ -2504,6 +3045,7 @@
       this._triedHlsFallback = false;
       this._triedLocalTranscode = false;
       this._earlyProbed = false;
+      this._triedAudioTranscode = false;
       this._setLoading(true);
       // Clean up
       if (this.hls) {
@@ -2566,16 +3108,103 @@
           this._diagnoseAndFail(info, data);
         });
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
+      } else if (State.mode === 'vod' && this._looksLikeMkv(url) && window.xtream && window.xtream.localTranscode && !this._triedLocalTranscode) {
+        // VOD sources are debrid-resolved cached-torrent files, and a huge
+        // share of those are .mkv rips — a container browsers can't demux at
+        // all, almost always carrying audio (DTS/TrueHD/AC-3/E-AC-3) and
+        // subtitle (ASS/SSA/PGS) formats Chromium can't decode or render
+        // either. Native <video> on these doesn't just fail cleanly — it
+        // frequently "succeeds" with picture and no sound (MKV's audio track
+        // gets silently ignored), which is what the no-audio detector below
+        // exists to catch after the fact. For known .mkv sources, skip that
+        // multi-second native attempt entirely and go straight to the
+        // ffmpeg→H.264/AAC HLS remux pipeline — it's slower to start but it's
+        // the only path that reliably gets picture AND sound for these files.
+        this._triedLocalTranscode = true;
+        this._triedAudioTranscode = true; // pre-empt the native-audio fallback too
+        console.log('[video] .mkv source detected in VOD mode — routing straight to local ffmpeg remux:', url);
+        this._setLoading(true);
+        window.xtream.localTranscode(url).then(transcodeUrl => {
+          if (!transcodeUrl) {
+            // No ffmpeg available — fall back to a native attempt; better than nothing.
+            console.warn('[video] ffmpeg unavailable — falling back to native <video> for .mkv (audio/subs may not work)');
+            this._triedLocalTranscode = false;
+            this._triedAudioTranscode = false;
+            this.video.src = url;
+            this.video.addEventListener('loadedmetadata', () => this.play(), { once:true });
+            this.video.addEventListener('playing', () => this._checkNativeAudio(url), { once:true });
+            return;
+          }
+          console.log('[video] .mkv remux started:', transcodeUrl);
+          this._loadTranscoded(transcodeUrl);
+        }).catch(e => this._fail('MKV remux error: ' + (e && e.message || e)));
       } else {
-        // Native (Safari) or TS — try native; TS is not directly playable in most browsers.
+        // Native playback — direct VOD files (mp4 etc. from providers like
+        // AIOStreams/Real-Debrid) and TS/Safari-HLS land here.
         this.video.src = url;
         this.video.addEventListener('loadedmetadata', () => this.play(), { once:true });
+        this.video.addEventListener('playing', () => this._checkNativeAudio(url), { once:true });
       }
+    }
+    // Heuristic .mkv detection from a debrid playback URL — these URLs rarely
+    // end in a clean `.mkv` extension (they're tokenized proxy paths), but
+    // nearly all of them carry the original filename in a `name`/`filename`
+    // query parameter (or occasionally a path segment) that does.
+    _looksLikeMkv(url) {
+      try {
+        const u = new URL(url);
+        const nameParam = u.searchParams.get('name') || u.searchParams.get('filename') || u.searchParams.get('title') || '';
+        if (/\.mkv(\W|$)/i.test(nameParam)) return true;
+        if (/\.mkv(\?|#|$)/i.test(u.pathname)) return true;
+      } catch (e) {
+        if (/\.mkv(\W|$)/i.test(url || '')) return true;
+      }
+      return false;
+    }
+    // Many torrent rips use audio codecs Chromium can't decode (DTS, TrueHD,
+    // AC-3/E-AC-3, etc.) — the video plays fine but completely silently, with
+    // no error event fired. Detect that (decoded video bytes growing, decoded
+    // audio bytes stuck at zero) and fall back to the same local-ffmpeg
+    // transcode pipeline used for HEVC video, which remuxes/encodes the audio
+    // to AAC so the browser can play it.
+    _checkNativeAudio(url) {
+      if (this._triedAudioTranscode) return;
+      const v = this.video;
+      if (typeof v.webkitAudioDecodedByteCount !== 'number') return; // not Chromium — can't detect this way
+      setTimeout(() => {
+        if (this.currentSrc !== url) return; // user navigated away / loaded something else
+        const audioBytes = v.webkitAudioDecodedByteCount || 0;
+        const videoBytes = v.webkitVideoDecodedByteCount || 0;
+        if (audioBytes > 0 || videoBytes === 0) return; // audio is fine, or nothing decoded yet
+        if (this._triedAudioTranscode || !(window.xtream && window.xtream.localTranscode)) return;
+        this._triedAudioTranscode = true;
+        console.warn('[video] no audio decoded — likely an unsupported audio codec (DTS/TrueHD/AC-3). Remuxing via local ffmpeg…');
+        this._setLoading(true);
+        const resumeAt = v.currentTime || 0;
+        window.xtream.localTranscode(url).then(transcodeUrl => {
+          if (!transcodeUrl) { this._fail('Audio could not be played (unsupported codec) and ffmpeg was unavailable to remux it.'); return; }
+          console.log('[video] audio remux started:', transcodeUrl);
+          this._loadTranscoded(transcodeUrl);
+          if (resumeAt > 1) {
+            this.video.addEventListener('canplay', () => { try { this.video.currentTime = resumeAt; } catch(e){} }, { once:true });
+          }
+        }).catch(e => this._fail('Audio remux error: ' + (e && e.message || e)));
+      }, 4000);
     }
     _loadTranscoded(transcodeUrl) {
       if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
       this._setLoading(true);
-      // Wait up to 4s for ffmpeg to produce its first segment before attaching HLS.js
+      // ffmpeg needs a moment to produce its first HLS segment before the
+      // manifest is fetchable — how long depends on the source (remote-URL
+      // fetch speed, codec, resolution). A single fixed 4s wait was too
+      // optimistic for slower sources and surfaced as a fatal
+      // "manifestLoadError" the instant HLS.js tried (and failed) to fetch
+      // the not-yet-written playlist. Retry with backoff instead of failing
+      // outright on the first miss — give ffmpeg up to ~40s total to start
+      // producing output before giving up for good.
+      const MAX_ATTEMPTS = 8;
+      let attemptsLeft = MAX_ATTEMPTS;
+      const isManifestMiss = (details) => details === 'manifestLoadError' || details === 'manifestLoadTimeOut' || details === 'manifestParsingError';
       const tok = this._loadToken;
       const attach = () => {
         if (this._loadToken !== tok) return; // channel changed/stopped meanwhile
@@ -2585,6 +3214,14 @@
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.play());
         this.hls.on(Hls.Events.ERROR, (_, data) => {
           if (!data.fatal) return;
+          if (isManifestMiss(data.details) && attemptsLeft > 0) {
+            attemptsLeft -= 1;
+            console.warn('[LocalTranscode] manifest not ready yet (' + data.details + ') — retrying, ' + attemptsLeft + ' attempt(s) left…');
+            try { this.hls.destroy(); } catch (e) {}
+            this.hls = null;
+            setTimeout(attach, 4000);
+            return;
+          }
           console.error('[LocalTranscode HLS error]', data.details);
           if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
           this._stopTranscode(); // free the provider connection ffmpeg holds
@@ -2715,6 +3352,7 @@
     currentChannel: null,
     searchQuery: '',
     view: 'player',
+    mode: null, // 'live' | 'vod' — chosen on the launcher screen; null = launcher showing
     guide: {
       anchor: null, // Date — left edge of guide
       pxPerHour: 220,
@@ -3712,10 +4350,14 @@
         hideConnect(); showApp();
         $('#server-pill-name').textContent = server.name || server.host;
         $('#server-pill').classList.remove('offline');
-        // Play last channel immediately using saved info — don't wait for catalog
+        // Play last channel immediately using saved info — don't wait for catalog.
+        // But hold off entirely until the user has picked Live TV on the mode
+        // launcher (otherwise we'd start decoding video before they've chosen).
         const lastFast = Storage.lastChannel();
         if (lastFast && server.type !== 'm3u') {
-          playChannel({ stream_id: lastFast.id, name: lastFast.name || 'Loading…', stream_icon: lastFast.icon || '' }, /*autoFocus*/ false);
+          const fastCh = { stream_id: lastFast.id, name: lastFast.name || 'Loading…', stream_icon: lastFast.icon || '' };
+          if (State.mode === 'live') playChannel(fastCh, /*autoFocus*/ false);
+          else State._pendingLiveChannel = fastCh;
         }
         // Load catalog in background (large catalogs can take several seconds)
         loadCatalog(false);
@@ -3727,7 +4369,10 @@
       const last = Storage.lastChannel();
       if (last) {
         const ch = State.streamsAll.find(s => String(s.stream_id) === String(last.id || last));
-        if (ch) playChannel(ch, /*autoFocus*/ false);
+        if (ch) {
+          if (State.mode === 'live') playChannel(ch, /*autoFocus*/ false);
+          else State._pendingLiveChannel = ch;
+        }
       }
       setLoading(false);
     } catch (e) {
@@ -4045,6 +4690,9 @@
     if (!stream) return;
     State.currentChannel = stream;
     markActiveChannel();
+    const overlayEl = $('#player-overlay'); if (overlayEl) overlayEl.classList.remove('vod-mode');
+    try { resetVodTransport(); } catch (e) {}
+    const clearlogoEl = $('#ov-clearlogo'); if (clearlogoEl) clearlogoEl.removeAttribute('src');
     $('#player-empty').classList.add('hidden');
     $('#ov-num').textContent  = stream.num ? ('CH ' + stream.num) : 'CH —';
     $('#ov-name').textContent = stream.name || '';
@@ -4180,6 +4828,7 @@
       }
     }
     if (v === 'favorites') renderFavoritesGrid();
+    if (v === 'vod') renderVodHome();
     if (v === 'player') bumpOverlay();
     if (v === 'multi') {
       $('#multi-hint').textContent = 'Sidebar clicks add channels here. Click a tile to give it audio.';
@@ -4191,6 +4840,186 @@
       $('#multi-hint').textContent = 'Click a tile to give it audio. Click a channel in the sidebar to add it here.';
     }
   }
+
+  // ---------------------------------------------------------------------
+  // Mode launcher: Live TV vs Video On Demand.
+  // Only one mode runs at a time — switching tears the other one all the
+  // way down (players destroyed, timers cleared, caches dropped) so it
+  // can't keep burning CPU in the background.
+  // ---------------------------------------------------------------------
+  function showModeLauncher() {
+    const el = $('#mode-launcher');
+    if (el) el.classList.remove('hidden');
+  }
+  function hideModeLauncher() {
+    const el = $('#mode-launcher');
+    if (el) el.classList.add('hidden');
+  }
+
+  function teardownLiveTV() {
+    try { console.log('[Mode] Tearing down Live TV… player.currentSrc=', State.player && State.player.currentSrc); } catch(e){}
+    // If casting, stop that first — otherwise playback continues on the TV
+    // even after the local player is destroyed.
+    try {
+      if (State.cast && (State.cast._casting || (typeof State.cast.isCasting === 'function' && State.cast.isCasting()))) {
+        if (typeof State.cast.stop === 'function') State.cast.stop();
+      }
+    } catch(e){}
+    try { if (State.player && typeof State.player.stop === 'function') State.player.stop(); } catch(e){}
+    try { if (State.preview && typeof State.preview.stop === 'function') State.preview.stop(); } catch(e){}
+    try {
+      if (typeof previewTimer !== 'undefined' && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    } catch(e){}
+    try {
+      if (State.multi) {
+        if (typeof State.multi._stopHealthMonitor === 'function') State.multi._stopHealthMonitor();
+        if (State.multi._healthInterval) { clearInterval(State.multi._healthInterval); State.multi._healthInterval = null; }
+        if (typeof State.multi.clear === 'function') State.multi.clear();
+      }
+    } catch(e){}
+    try {
+      if (State.mvPip && typeof State.mvPip.stop === 'function') State.mvPip.stop();
+    } catch(e){}
+    try {
+      if (State.guide && State.guide.nowInterval) { clearInterval(State.guide.nowInterval); State.guide.nowInterval = null; }
+    } catch(e){}
+    try { epgCache.clear(); } catch(e){}
+    try {
+      // Stop the live video element completely so decoding/network activity ends.
+      const v = $('#video');
+      if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); try { v.load(); } catch(e){} }
+    } catch(e){}
+    try { console.log('[Mode] Live TV torn down — player, multi-view, EPG timers and caches stopped.'); } catch(e){}
+  }
+
+  function teardownVOD() {
+    try { console.log('[Mode] Tearing down VOD…'); } catch(e){}
+    // Drop the focused entry so any in-flight async TMDB/scraper lookups that
+    // resolve later see a stale State.vodFocused and bail out (existing guard
+    // pattern: `if (State.vodFocused.entry !== entry) return;`).
+    try { State.vodFocused = null; } catch(e){}
+    try {
+      if (typeof _tmdbCache !== 'undefined' && _tmdbCache && typeof _tmdbCache.clear === 'function') _tmdbCache.clear();
+    } catch(e){}
+    try {
+      // Stop any movie/show currently playing from the VOD pipeline.
+      const v = $('#vod-video') || ($('#video') && State.mode !== 'live' ? $('#video') : null);
+      if (v && v.tagName === 'VIDEO') { try { v.pause(); } catch(e){} }
+    } catch(e){}
+    try { console.log('[Mode] VOD torn down — pending lookups invalidated, caches cleared.'); } catch(e){}
+    try { restoreVodHubToContent(); } catch(e){}
+  }
+
+  function showLiveTVChrome(show) {
+    const tabs      = $('#view-tabs');
+    const sidebar   = $('.sidebar');
+    const lip       = $('#sidebar-lip');
+    const pill      = $('#server-pill');
+    const pillSep   = $('#server-pill-sep');
+    const chSearch  = $('#channel-search');
+    const refreshBt = $('#btn-refresh');
+    if (tabs)    tabs.classList.toggle('hidden', !show);
+    if (sidebar) sidebar.classList.toggle('hidden', !show);
+    if (lip)     lip.classList.toggle('hidden', !show);
+    // The server selector, channel search box and channel-list refresh button
+    // all belong to Live TV only — VOD doesn't use Xtream/M3U servers or
+    // channels at all, so hide them (and the pill's separator) in VOD mode.
+    if (pill)      pill.classList.toggle('hidden', !show);
+    if (pillSep)   pillSep.classList.toggle('hidden', !show);
+    if (chSearch)  chSearch.classList.toggle('hidden', !show);
+    if (refreshBt) refreshBt.classList.toggle('hidden', !show);
+  }
+
+  // VOD's own Home/Movies/Shows/Search nav lives inside #vod-root by default,
+  // but we relocate it into the top bar (in the same slot Live TV's nav-tabs
+  // occupy) whenever VOD is active, so it reads as the primary top-level nav
+  // rather than a secondary row buried in the content area.
+  function placeVodHubInTopbar() {
+    const hub = $('#vod-hub');
+    const bar = $('.topbar');
+    const grow = $('.topbar .grow');
+    if (hub && bar && grow && hub.parentElement !== bar) {
+      bar.insertBefore(hub, grow);
+      hub.classList.add('vod-hub-in-topbar');
+    }
+  }
+  function restoreVodHubToContent() {
+    const hub  = $('#vod-hub');
+    const root = $('#vod-root');
+    if (hub && root && hub.parentElement !== root) {
+      root.insertBefore(hub, root.firstChild);
+      hub.classList.remove('vod-hub-in-topbar');
+    }
+  }
+
+  // Enter Live TV: this is the original Xtream experience, gated behind
+  // server connection. VOD has nothing to do with servers, so the connect
+  // screen is ONLY ever shown for Live TV.
+  function enterLiveTV() {
+    State.mode = 'live';
+    hideModeLauncher();
+    showLiveTVChrome(true);
+    restoreVodHubToContent();
+    // Switch the visible `.view` away from VOD immediately — `connectToServer`/
+    // `showConnect` don't call setView themselves, so without this the VOD
+    // view (#view-vod) would keep its `.show` class and stay on screen
+    // underneath (or instead of) the Live TV UI.
+    setView('player');
+    if (!State.api) {
+      // Not connected to a server yet — go through the normal connect flow
+      // (auto-connect to the saved active server, or show the picker).
+      const active = Storage.activeServer();
+      if (active) connectToServer(active);
+      else showConnect();
+    } else {
+      // Already connected from earlier in this session — just resume.
+      showApp();
+      setView('player');
+      try {
+        const pending = State._pendingLiveChannel || State.currentChannel;
+        if (pending) playChannel(pending, false);
+        State._pendingLiveChannel = null;
+      } catch(e){}
+    }
+    try { console.log('[Mode] Entered Live TV'); } catch(e){}
+  }
+
+  // Enter VOD: fully independent of Xtream/M3U servers — uses Real-Debrid,
+  // Trakt and TMDB directly, so we skip the connect screen entirely.
+  function enterVOD() {
+    State.mode = 'vod';
+    hideModeLauncher();
+    showLiveTVChrome(false);
+    placeVodHubInTopbar();
+    const castBar = $('#cast-bar');
+    if (castBar) castBar.classList.remove('show');
+    showApp();
+    setView('vod');
+    try { console.log('[Mode] Entered Video On Demand'); } catch(e){}
+  }
+
+  function setMode(mode) {
+    if (mode !== 'live' && mode !== 'vod') return;
+    if (State.mode === mode) { hideModeLauncher(); return; }
+
+    // Tear down whichever mode we're leaving (if any) so it stops using CPU.
+    if (State.mode === 'live') teardownLiveTV();
+    else if (State.mode === 'vod') teardownVOD();
+
+    if (mode === 'live') enterLiveTV();
+    else enterVOD();
+  }
+
+  $('#mode-btn-live') && $('#mode-btn-live').addEventListener('click', () => setMode('live'));
+  $('#mode-btn-vod')  && $('#mode-btn-vod').addEventListener('click',  () => setMode('vod'));
+  $('#btn-switch-mode') && $('#btn-switch-mode').addEventListener('click', () => showModeLauncher());
+  // From the connect screen (only reachable via Live TV), let the user back out
+  // to the launcher to pick VOD instead, without forcing them through a connection.
+  $('#btn-connect-back-to-launcher') && $('#btn-connect-back-to-launcher').addEventListener('click', () => {
+    $('#connect-screen').style.display = 'none';
+    State.mode = null;
+    showModeLauncher();
+  });
 
   // Search
   const onSearch = debounce(() => {
@@ -4319,8 +5148,62 @@
     }
     return list[idx];
   }
-  $('#btn-next').addEventListener('click', () => { const n = neighborChannel(1); if (n) playChannel(n); });
-  $('#btn-prev').addEventListener('click', () => { const n = neighborChannel(-1); if (n) playChannel(n); });
+  // FF/rewind step sequence used in VOD mode (cycles back to normal speed at the end).
+  const VOD_FF_STEPS = [2, 4, 8, 16];
+
+  function vodFastForward(dir) {
+    const mpv2 = Mpv2.active;
+    const video = !mpv2 && State.player && State.player.video;
+    if (!mpv2 && !video) return;
+    if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
+
+    if (VodTransport.ffDir !== dir) { VodTransport.ffDir = dir; VodTransport.ffRate = 1; }
+    const idx = VOD_FF_STEPS.indexOf(VodTransport.ffRate);
+    const next = (idx === -1 || idx === VOD_FF_STEPS.length - 1) ? null : VOD_FF_STEPS[idx + 1];
+
+    if (VodTransport.ffRate === 1) {
+      VodTransport.ffRate = VOD_FF_STEPS[0];
+    } else if (next) {
+      VodTransport.ffRate = next;
+    } else {
+      // Wrap back to normal playback.
+      VodTransport.ffRate = 1;
+      VodTransport.ffDir = 0;
+      if (mpv2) Mpv2.setSpeed(1); else try { video.playbackRate = 1; } catch (e) {}
+      toast('Normal speed');
+      return;
+    }
+
+    if (dir > 0) {
+      // Native forward fast-play.
+      if (mpv2) Mpv2.setSpeed(VodTransport.ffRate);
+      else try { video.playbackRate = VodTransport.ffRate; } catch (e) {}
+      toast('▶▶ ' + VodTransport.ffRate + 'x');
+    } else if (mpv2) {
+      // libmpv can't play in reverse either — simulate rewind via relative seeks.
+      Mpv2.setSpeed(1);
+      const rate = VodTransport.ffRate;
+      VodTransport.ffTimer = setInterval(() => { Mpv2.seekRelative(-(rate * 0.25)); }, 250);
+      toast('◀◀ ' + rate + 'x');
+    } else {
+      // HTML5 video can't play in reverse — simulate rewind by stepping currentTime backward.
+      try { video.playbackRate = 1; } catch (e) {}
+      const rate = VodTransport.ffRate;
+      VodTransport.ffTimer = setInterval(() => {
+        try { video.currentTime = Math.max(0, (video.currentTime || 0) - (rate * 0.25)); } catch (e) {}
+      }, 250);
+      toast('◀◀ ' + rate + 'x');
+    }
+  }
+
+  $('#btn-next').addEventListener('click', () => {
+    if (State.mode === 'vod') { vodFastForward(1); return; }
+    const n = neighborChannel(1); if (n) playChannel(n);
+  });
+  $('#btn-prev').addEventListener('click', () => {
+    if (State.mode === 'vod') { vodFastForward(-1); return; }
+    const n = neighborChannel(-1); if (n) playChannel(n);
+  });
   function setPlayIcon(playing) {
     const btn = $('#btn-play');
     const ip = btn.querySelector('.ic-play');
@@ -4329,10 +5212,13 @@
     if (ipa) ipa.style.display = playing ? '' : 'none';
   }
   $('#btn-play').addEventListener('click', () => {
+    if (Mpv2.active) { Mpv2.togglePause(); return; }
+    if (State.mode === 'vod' && (VodTransport.ffRate !== 1 || VodTransport.ffTimer)) { resetVodTransport(); }
     if (State.player.isPlaying()) { State.player.pause(); setPlayIcon(false); }
     else { State.player.play(); setPlayIcon(true); }
   });
   $('#btn-stop').addEventListener('click', () => {
+    if (Mpv2.active) { exitVodPlayback(); return; }
     if (!State.player) return;
     State.player.stop();
     State.currentChannel = null;
@@ -4364,13 +5250,21 @@
     if (ic2) ic2.style.display = muted ? '' : 'none';
   }
   $('#btn-mute').addEventListener('click', () => {
+    if (Mpv2.active) {
+      if (Mpv2.volume > 0) { Mpv2._unmuteVolume = Mpv2.volume; Mpv2.setVolume(0); }
+      else { Mpv2.setVolume(Mpv2._unmuteVolume || 80); }
+      Mpv2.syncControls();
+      return;
+    }
     const v = $('#video');
     v.muted = !v.muted;
     setMuteIcon(v.muted);
     Storage.setSetting('muted', v.muted);
   });
   $('#vol').addEventListener('input', () => {
-    const v = +$('#vol').value / 100;
+    const raw = +$('#vol').value;
+    if (Mpv2.active) { Mpv2.setVolume(raw); Mpv2.syncControls(); return; }
+    const v = raw / 100;
     State.player.setVolume(v);
     Storage.setSetting('volume', v);
   });
@@ -4407,6 +5301,10 @@
   }
 
   $('#btn-pip').addEventListener('click', openPip);
+
+  // VOD-only "back to library" button — stops playback, drops the overlay out
+  // of vod-mode, and returns to the VOD browse view (#view-vod).
+  $('#btn-vod-back').addEventListener('click', exitVodPlayback);
 
   // Overlay hide on movement
   let overlayHideTimer = null;
@@ -4558,6 +5456,21 @@
     $('#s-overlay-opacity').value = opacityPct;
     $('#s-overlay-opacity-val').textContent = opacityPct + '%';
     renderServerEditor();
+    renderIntegrationsPanel();
+    // Show only the settings relevant to whichever mode you're currently
+    // in — Live TV settings when in Live TV, VOD settings when in VOD —
+    // so the modal isn't a mixed list of two unrelated feature sets.
+    const liveGroup = $('#settings-group-live');
+    const vodGroup  = $('#settings-group-vod');
+    const onVod = State.mode === 'vod';
+    if (liveGroup) liveGroup.style.display = onVod ? 'none' : '';
+    if (vodGroup)  vodGroup.style.display  = onVod ? '' : 'none';
+    const midDivider = $('#settings-group-divider-mid');
+    if (midDivider) midDivider.style.display = 'none';
+    const integrations = $('#integrations-section');
+    if (integrations) integrations.open = true;
+    const serverProfile = $('#server-profile-section');
+    if (serverProfile) serverProfile.open = true;
     openModal('settings-modal');
   });
   $('#s-container').addEventListener('change', () => {
@@ -4577,6 +5490,7 @@
     const srv = Storage.activeServer();
     const root = $('#server-edit-area');
     if (!srv) { root.innerHTML = '<div style="color:var(--muted)">No active server.</div>'; return; }
+    const m3uUrl = (srv.host && srv.username && srv.password) ? serverM3uUrl(srv) : '';
     root.innerHTML = `
       <div class="server-form" style="grid-template-columns: 1fr 1fr;">
         <div class="full"><label>Profile name</label><input id="se-name" type="text" value="${escapeHtml(srv.name||'')}"></div>
@@ -4593,6 +5507,15 @@
           </div>
         </div>
         <div class="full"><label>CORS proxy</label><input id="se-proxy" type="text" value="${escapeHtml(srv.proxy||'')}"></div>
+        ${m3uUrl ? `
+        <div class="full">
+          <label>M3U URL</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="se-m3u-url" type="text" value="${escapeHtml(m3uUrl)}" readonly
+              style="flex:1;font-family:monospace;font-size:11px;color:var(--muted);cursor:text;user-select:all;">
+            <button id="se-copy-m3u" type="button" style="white-space:nowrap;flex-shrink:0;">Copy URL</button>
+          </div>
+        </div>` : ''}
         <div class="full form-actions">
           <button id="se-save" class="primary">Save changes</button>
         </div>
@@ -4609,6 +5532,2218 @@
       closeModal('settings-modal');
       await connectToServer(Storage.activeServer());
     });
+    const copyBtn = $('#se-copy-m3u');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        const url = $('#se-m3u-url').value;
+        navigator.clipboard.writeText(url).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy URL'; }, 2000);
+        }).catch(() => {
+          // Fallback for environments where clipboard API is unavailable
+          $('#se-m3u-url').select();
+          document.execCommand('copy');
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy URL'; }, 2000);
+        });
+      });
+    }
+  }
+
+  /* ---- VOD integrations panel (Real-Debrid / Trakt / scraper prefs) ---- */
+  let _traktPollTimer = null;
+  let _rdPollTimer = null;
+  function stopTraktPoll() { if (_traktPollTimer) { clearInterval(_traktPollTimer); _traktPollTimer = null; } }
+  function stopRdPoll() { if (_rdPollTimer) { clearInterval(_rdPollTimer); _rdPollTimer = null; } }
+
+  // App-level Trakt API credentials (registered once by the app's developer —
+  // end users never see or enter these; they just scan a QR / enter a PIN).
+  const TRAKT_CLIENT_ID = 'f621a1b4fe3eba2f95eb0145e38a061631f06c933a93de2e03fb0f6be2c0c138';
+  const TRAKT_CLIENT_SECRET = '8e5b2c08cbb2148bd2e9928fa87ac6e783f6525724d030bc6cfea4f04a956a77';
+
+  // Renders a scannable QR code for a URL via a public QR image service — no
+  // local QR library needed; just an <img> pointing at the encoded data.
+  function qrImg(data, size) {
+    size = size || 160;
+    const src = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + encodeURIComponent(data);
+    return `<img src="${src}" width="${size}" height="${size}" alt="QR code" style="border-radius:8px; background:#fff; padding:6px;">`;
+  }
+
+  function renderIntegrationsPanel() {
+    const it = Storage.integrations();
+
+    // Real-Debrid
+    const rdConnected = Storage.isRealDebridConnected();
+    $('#s-rd-status').textContent = rdConnected ? 'Connected' : 'Not connected';
+    $('#s-rd-status').style.color = rdConnected ? 'var(--accent)' : 'var(--muted)';
+    $('#btn-rd-connect').style.display = rdConnected ? 'none' : '';
+    $('#btn-rd-disconnect').style.display = rdConnected ? '' : 'none';
+    if (rdConnected) {
+      stopRdPoll();
+      $('#s-rd-device-area').style.display = 'none';
+      $('#s-rd-device-area').innerHTML = '';
+    }
+
+    // Trakt
+    const traktConnected = Storage.isTraktConnected();
+    $('#s-trakt-status').textContent = traktConnected ? 'Connected' : 'Not connected';
+    $('#s-trakt-status').style.color = traktConnected ? 'var(--accent)' : 'var(--muted)';
+    $('#btn-trakt-connect').style.display = traktConnected ? 'none' : '';
+    $('#btn-trakt-disconnect').style.display = traktConnected ? '' : 'none';
+    if (traktConnected) {
+      stopTraktPoll();
+      $('#s-trakt-device-area').style.display = 'none';
+      $('#s-trakt-device-area').innerHTML = '';
+    }
+
+    // Providers / autopick
+    renderProviderList();
+    $('#s-autopick').value = Storage.getAutoPickStream() ? 'on' : 'off';
+  }
+
+  $('#btn-rd-disconnect').addEventListener('click', () => {
+    stopRdPoll();
+    Storage.disconnectRealDebrid();
+    renderIntegrationsPanel();
+    toast('Real-Debrid disconnected.');
+  });
+
+  $('#btn-rd-connect').addEventListener('click', async () => {
+    // Real-Debrid's "open source" client_id — pre-authorized for the device-code
+    // flow so users just log in via real-debrid.com/device (or a QR code) instead
+    // of generating and pasting an API token. Used by community apps like Debrid
+    // Media Manager. See https://api.real-debrid.com/ (OAuth2 for open source apps).
+    const OPEN_SOURCE_CLIENT_ID = 'X245A4XAIBGVM';
+    const area = $('#s-rd-device-area');
+    area.style.display = '';
+    area.innerHTML = '<div style="color:var(--muted)">Requesting login code…</div>';
+    stopRdPoll();
+
+    try {
+      const codeRes = await window.xtream.fetch(
+        `https://api.real-debrid.com/oauth/v2/device/code?client_id=${OPEN_SOURCE_CLIENT_ID}&new_credentials=yes`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+      const codeData = JSON.parse(codeRes.body || '{}');
+      if (!codeData.device_code) throw new Error('No device code returned.');
+
+      const verifyUrl = codeData.verification_url || 'https://real-debrid.com/device';
+      area.innerHTML = `
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          ${qrImg(verifyUrl)}
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div>Scan the QR code, or go to <a href="${verifyUrl}" target="_blank" rel="noopener" style="color:var(--accent);">${escapeHtml(verifyUrl.replace(/^https?:\/\//,''))}</a> and log in with your Real-Debrid account, then enter:</div>
+            <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
+            <div id="s-rd-poll-status" style="color:var(--muted);">Waiting for you to log in…</div>
+          </div>
+        </div>`;
+
+      const interval = Math.max(2, codeData.interval || 5) * 1000;
+      const expiresAt = Date.now() + (codeData.expires_in || 1800) * 1000;
+      let credentials = null; // { client_id, client_secret } — issued to this device once authorized
+
+      _rdPollTimer = setInterval(async () => {
+        if (Date.now() > expiresAt) {
+          stopRdPoll();
+          const st = $('#s-rd-poll-status'); if (st) st.textContent = 'Code expired — click Log in to Real-Debrid to try again.';
+          return;
+        }
+        try {
+          if (!credentials) {
+            // Step 1: poll for the per-device client_id/secret once the user authorizes.
+            const credRes = await window.xtream.fetch(
+              `https://api.real-debrid.com/oauth/v2/device/credentials?client_id=${OPEN_SOURCE_CLIENT_ID}&code=${encodeURIComponent(codeData.device_code)}`,
+              { headers: { 'Accept': 'application/json' } }
+            );
+            const credStatus = credRes.status || credRes.statusCode;
+            if (credStatus === 200) {
+              const cred = JSON.parse(credRes.body || '{}');
+              if (cred.client_id && cred.client_secret) {
+                credentials = cred;
+                const st = $('#s-rd-poll-status'); if (st) st.textContent = 'Logged in — finishing up…';
+              }
+            }
+            // 400/etc while pending — keep waiting
+            return;
+          }
+          // Step 2: exchange device_code + issued credentials for an access token.
+          const tokRes = await window.xtream.fetch('https://api.real-debrid.com/oauth/v2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+            body: new URLSearchParams({
+              client_id: credentials.client_id,
+              client_secret: credentials.client_secret,
+              code: codeData.device_code,
+              grant_type: 'http://oauth.net/grant_type/device/1.0'
+            }).toString()
+          });
+          const tokStatus = tokRes.status || tokRes.statusCode;
+          if (tokStatus === 200) {
+            const tok = JSON.parse(tokRes.body || '{}');
+            stopRdPoll();
+            Storage.setRealDebridTokens({
+              clientId: credentials.client_id,
+              clientSecret: credentials.client_secret,
+              accessToken: tok.access_token || '',
+              refreshToken: tok.refresh_token || '',
+              expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+            });
+            renderIntegrationsPanel();
+            toast('Real-Debrid connected!');
+          }
+        } catch (e) { /* ignore transient poll errors */ }
+      }, interval);
+    } catch (e) {
+      area.innerHTML = `<div style="color:var(--danger, #e55);">Couldn't start Real-Debrid login: ${escapeHtml(e.message || String(e))}</div>`;
+    }
+  });
+
+  function setProviderStatus(msg, isError) {
+    const el = $('#s-provider-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--danger, #e55)' : 'var(--muted)';
+  }
+
+  function renderProviderList() {
+    const list = $('#provider-list');
+    if (!list) return;
+    const providers = Storage.getProviders();
+    if (!providers.length) {
+      list.innerHTML = '<div style="font-size:12px; color:var(--muted);">No providers added yet — paste a provider or repository URL below to get started.</div>';
+      return;
+    }
+    list.innerHTML = providers.map((p, i) => `
+      <div class="provider-row" draggable="true" data-id="${escapeHtml(p.id)}" style="display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--panel-2, rgba(255,255,255,0.04)); border-radius:8px; cursor:grab;">
+        <span style="opacity:.5; font-size:12px;">⋮⋮</span>
+        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          <strong>${escapeHtml(p.name || p.baseUrl)}</strong>
+          <span style="color:var(--muted); font-size:12px;"> — ${escapeHtml(p.baseUrl)}</span>
+        </span>
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; color:var(--muted);">
+          <input type="checkbox" class="provider-toggle" data-id="${escapeHtml(p.id)}" ${p.enabled ? 'checked' : ''}> enabled
+        </label>
+        <button class="provider-remove" data-id="${escapeHtml(p.id)}" style="font-size:12px;">Remove</button>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.provider-toggle').forEach(cb => {
+      cb.addEventListener('change', () => {
+        Storage.setProviderEnabled(cb.dataset.id, cb.checked);
+      });
+    });
+    list.querySelectorAll('.provider-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        Storage.removeProvider(btn.dataset.id);
+        renderProviderList();
+      });
+    });
+
+    // Drag-to-reorder
+    let dragId = null;
+    list.querySelectorAll('.provider-row').forEach(row => {
+      row.addEventListener('dragstart', () => { dragId = row.dataset.id; row.style.opacity = '0.4'; });
+      row.addEventListener('dragend', () => { row.style.opacity = ''; });
+      row.addEventListener('dragover', (e) => { e.preventDefault(); });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const targetId = row.dataset.id;
+        if (!dragId || dragId === targetId) return;
+        const ids = Storage.getProviders().map(p => p.id);
+        const from = ids.indexOf(dragId);
+        const to = ids.indexOf(targetId);
+        if (from < 0 || to < 0) return;
+        ids.splice(to, 0, ids.splice(from, 1)[0]);
+        Storage.reorderProviders(ids);
+        renderProviderList();
+      });
+    });
+  }
+
+  $('#btn-provider-add')?.addEventListener('click', async () => {
+    const input = $('#s-provider-url');
+    const url = (input?.value || '').trim();
+    if (!url) { setProviderStatus('Paste a provider URL first.', true); return; }
+    setProviderStatus('Checking provider…');
+    const result = await ProviderManager.addByUrl(url);
+    if (result.ok) {
+      input.value = '';
+      setProviderStatus(`Added "${result.provider.name}".`);
+      renderProviderList();
+    } else {
+      setProviderStatus(result.error, true);
+    }
+  });
+
+  $('#btn-repo-add')?.addEventListener('click', async () => {
+    const input = $('#s-repo-url');
+    const url = (input?.value || '').trim();
+    if (!url) { setProviderStatus('Paste a repository URL first.', true); return; }
+    setProviderStatus('Loading repository…');
+    const repo = await ProviderManager.fetchRepo(url);
+    if (!repo.ok) { setProviderStatus(repo.error, true); return; }
+    if (!repo.entries.length) { setProviderStatus('That repository has no provider entries.', true); return; }
+    let added = 0, skipped = 0, failed = 0;
+    for (const entry of repo.entries) {
+      const r = await ProviderManager.addByUrl(entry.url);
+      if (r.ok) added++;
+      else if (/already in your provider list/.test(r.error || '')) skipped++;
+      else failed++;
+    }
+    input.value = '';
+    setProviderStatus(`Repository processed: ${added} added, ${skipped} already installed, ${failed} failed.`, failed > 0 && added === 0);
+    renderProviderList();
+  });
+
+  $('#s-autopick').addEventListener('change', () => {
+    Storage.setAutoPickStream($('#s-autopick').value === 'on');
+  });
+
+  $('#btn-trakt-disconnect').addEventListener('click', () => {
+    stopTraktPoll();
+    Storage.disconnectTrakt();
+    renderIntegrationsPanel();
+    toast('Trakt disconnected.');
+  });
+
+  $('#btn-trakt-connect').addEventListener('click', async () => {
+    const clientId = TRAKT_CLIENT_ID;
+    const clientSecret = TRAKT_CLIENT_SECRET;
+
+    const area = $('#s-trakt-device-area');
+    area.style.display = '';
+    area.innerHTML = '<div style="color:var(--muted)">Requesting device code…</div>';
+    stopTraktPoll();
+
+    try {
+      const codeRes = await window.xtream.fetch('https://api.trakt.tv/oauth/device/code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId })
+      });
+      const codeData = JSON.parse(codeRes.body || codeRes.data || '{}');
+      if (!codeData.device_code) throw new Error('No device code returned.');
+
+      area.innerHTML = `
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          ${qrImg(codeData.verification_url || 'https://trakt.tv/activate')}
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div>Scan the QR code, or go to <a href="https://trakt.tv/activate" target="_blank" rel="noopener" style="color:var(--accent);">trakt.tv/activate</a> and enter this code:</div>
+            <div style="font-size:22px; font-weight:700; letter-spacing:2px; color:var(--accent);">${escapeHtml(codeData.user_code || '')}</div>
+            <div id="s-trakt-poll-status" style="color:var(--muted);">Waiting for authorization…</div>
+          </div>
+        </div>`;
+
+      const interval = Math.max(2, codeData.interval || 5) * 1000;
+      const expiresAt = Date.now() + (codeData.expires_in || 600) * 1000;
+
+      _traktPollTimer = setInterval(async () => {
+        if (Date.now() > expiresAt) {
+          stopTraktPoll();
+          const st = $('#s-trakt-poll-status'); if (st) st.textContent = 'Code expired — click Connect Trakt to try again.';
+          return;
+        }
+        try {
+          const tokRes = await window.xtream.fetch('https://api.trakt.tv/oauth/device/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: codeData.device_code,
+              client_id: clientId,
+              client_secret: clientSecret
+            })
+          });
+          const status = tokRes.status || tokRes.statusCode;
+          if (status === 200) {
+            const tok = JSON.parse(tokRes.body || tokRes.data || '{}');
+            stopTraktPoll();
+            Storage.setTraktTokens({
+              enabled: true,
+              accessToken: tok.access_token || '',
+              refreshToken: tok.refresh_token || '',
+              expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+            });
+            renderIntegrationsPanel();
+            toast('Trakt connected!');
+          } else if (status === 400) {
+            // authorization_pending — keep polling
+          } else if (status === 404 || status === 410 || status === 409 || status === 418) {
+            stopTraktPoll();
+            const st = $('#s-trakt-poll-status'); if (st) st.textContent = 'Authorization failed or was denied — click Connect Trakt to try again.';
+          }
+        } catch (e) { /* ignore transient poll errors */ }
+      }, interval);
+    } catch (e) {
+      area.innerHTML = `<div style="color:var(--danger, #e55);">Couldn't start Trakt authorization: ${escapeHtml(e.message || String(e))}</div>`;
+    }
+  });
+
+  /* ============================================================
+   *  VOD (Discover) — Netflix-style browse
+   * ============================================================ */
+  const TraktAPI = {
+    BASE: 'https://api.trakt.tv',
+    async _get(path) {
+      const it = Storage.integrations();
+      const headers = {
+        'Content-Type': 'application/json',
+        'trakt-api-version': '2',
+        'trakt-api-key': TRAKT_CLIENT_ID,
+      };
+      if (it.trakt.accessToken) headers['Authorization'] = 'Bearer ' + it.trakt.accessToken;
+      const r = await window.xtream.fetch(this.BASE + path, { headers });
+      if (!r.ok && r.status !== 200) throw new Error('Trakt error ' + r.status);
+      return JSON.parse(r.body || '[]');
+    },
+    trendingMovies()  { return this._get('/movies/trending?limit=20'); },
+    popularMovies()   { return this._get('/movies/popular?limit=20'); },
+    trendingShows()   { return this._get('/shows/trending?limit=20'); },
+    popularShows()    { return this._get('/shows/popular?limit=20'); },
+    searchTitles(q)   { return this._get('/search/movie,show?query=' + encodeURIComponent(q) + '&limit=24'); },
+  };
+
+  // App-level TMDB credentials (registered once by the app's developer — used
+  // purely to fetch posters/backdrops/overviews for VOD browsing).
+  const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIzNTBlNTZmZjllMDk1ODY2MjFkYTZiODQzNDM3NTlkOCIsIm5iZiI6MTc4MDg2NzE0MS4zOTM5OTk4LCJzdWIiOiI2YTI1ZTA0NWY4MDAwYmM3ZmY2MGM0NmUiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.Ho_zlsFbvxR69fC61oene9i5hOjCB5O5lM3iDxb3yxE';
+  const TMDB_IMG = 'https://image.tmdb.org/t/p/w342';
+  const TMDB_BACKDROP_IMG = 'https://image.tmdb.org/t/p/w1280';
+  const TMDB_LOGO_IMG = 'https://image.tmdb.org/t/p/w500';
+
+  // ---- VOD debug logging helpers ----
+  // All VOD-related errors funnel through these so they show up in DevTools
+  // console with enough context (status codes, raw response snippets) to
+  // diagnose "X failed" toasts without re-running the whole flow.
+  function vodLog(...args)  { try { console.log('[VOD]', ...args); } catch (e) {} }
+  function vodWarn(...args) { try { console.warn('[VOD]', ...args); } catch (e) {} }
+  function vodErr(...args)  { try { console.error('[VOD]', ...args); } catch (e) {} }
+  function safeJsonParse(body, context) {
+    try {
+      return JSON.parse(body || '{}');
+    } catch (e) {
+      vodErr(`${context}: response was not valid JSON —`, e.message,
+             '\nRaw response (first 400 chars):', String(body == null ? '' : body).slice(0, 400));
+      throw new Error(`${context} returned an unexpected response (not JSON) — see console for the raw body.`);
+    }
+  }
+
+  // ---- Provider manager: add/validate Stremio-addon-protocol stream sources ----
+  // The app has NO scraper baked in — users add their own "providers" (any
+  // Stremio addon that exposes a `stream` resource for movie/series, whether
+  // public, self-hosted, or a fork) by pasting either:
+  //   • a manifest URL / base URL for a single addon, or
+  //   • a "repository" URL — a JSON array of { name, url } entries to bulk-add
+  // This mirrors how Cloudstream/Syncler/Weyd let users install providers
+  // without any of them being hardcoded into the app itself.
+  const ProviderManager = {
+    // Normalize whatever the user pasted into a base URL (strip /manifest.json, trailing slashes)
+    _toBaseUrl(input) {
+      let u = String(input || '').trim();
+      if (!u) return '';
+      if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+      u = u.replace(/\/manifest\.json\/?$/i, '');
+      u = u.replace(/\/+$/, '');
+      return u;
+    },
+    // Fetch + validate a Stremio addon manifest at {baseUrl}/manifest.json.
+    // Returns { ok, name, baseUrl, manifestUrl, description, error }.
+    async fetchManifest(input) {
+      const baseUrl = this._toBaseUrl(input);
+      if (!baseUrl) return { ok: false, error: 'Enter a URL first.' };
+      const manifestUrl = baseUrl + '/manifest.json';
+      vodLog('Provider: fetching manifest', manifestUrl);
+      try {
+        const r = await window.xtream.fetch(manifestUrl, { headers: { 'Accept': 'application/json' } });
+        const status = r.status || r.statusCode;
+        if (status >= 400) {
+          vodErr('Provider manifest fetch failed:', manifestUrl, 'status', status);
+          return { ok: false, error: `Couldn't reach a Stremio addon manifest at this URL (status ${status}). Double-check the address.` };
+        }
+        const manifest = safeJsonParse(r.body, 'Provider manifest');
+        const resources = (manifest.resources || []).map(res => typeof res === 'string' ? res : (res && res.name));
+        const supportsStream = resources.includes('stream');
+        if (!manifest || !manifest.id || !supportsStream) {
+          vodWarn('Provider manifest missing stream resource:', manifestUrl, manifest);
+          return {
+            ok: false,
+            error: `That addon doesn't expose a "stream" resource, so it can't supply playable links for movies/shows. ` +
+                   `(Found resources: ${resources.length ? resources.join(', ') : 'none'}.)`,
+          };
+        }
+        vodLog('Provider manifest OK:', manifest.name || manifest.id, manifestUrl);
+        return {
+          ok: true,
+          name: manifest.name || manifest.id,
+          description: manifest.description || '',
+          baseUrl,
+          manifestUrl,
+        };
+      } catch (e) {
+        vodErr('Provider manifest fetch error:', manifestUrl, e.message || e);
+        return { ok: false, error: `Couldn't load that addon's manifest — ${e.message || e}` };
+      }
+    },
+    // Add a single provider by URL (validates first). Returns { ok, provider?, error? }.
+    async addByUrl(input) {
+      const result = await this.fetchManifest(input);
+      if (!result.ok) return result;
+      const existing = Storage.getProviders().find(p => p.baseUrl === result.baseUrl);
+      if (existing) return { ok: false, error: `"${existing.name}" is already in your provider list.` };
+      const provider = Storage.addProvider(result.name, result.baseUrl, 'manual');
+      return { ok: true, provider };
+    },
+    // Fetch a "repository" — a JSON document listing multiple providers, e.g.
+    //   [{ "name": "My Fork", "url": "https://my-host/manifest.json" }, ...]
+    // or { "providers": [ ... ] }. Returns { ok, entries: [{name,url}], error }.
+    async fetchRepo(input) {
+      let url = String(input || '').trim();
+      if (!url) return { ok: false, error: 'Enter a repository URL first.' };
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      vodLog('Provider repo: fetching', url);
+      try {
+        const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
+        const status = r.status || r.statusCode;
+        if (status >= 400) {
+          vodErr('Provider repo fetch failed:', url, 'status', status);
+          return { ok: false, error: `Couldn't load that repository (status ${status}).` };
+        }
+        const data = safeJsonParse(r.body, 'Provider repository');
+        const raw = Array.isArray(data) ? data : (Array.isArray(data.providers) ? data.providers : null);
+        if (!raw) {
+          return { ok: false, error: 'That URL didn\'t return a recognizable provider list (expected a JSON array, or { "providers": [...] }).' };
+        }
+        const entries = raw.map(e => ({
+          name: (e && (e.name || e.title)) || '',
+          url: (e && (e.url || e.manifestUrl || e.baseUrl)) || '',
+        })).filter(e => e.url);
+        vodLog('Provider repo entries found:', entries.length);
+        return { ok: true, entries };
+      } catch (e) {
+        vodErr('Provider repo fetch error:', url, e.message || e);
+        return { ok: false, error: `Couldn't load that repository — ${e.message || e}` };
+      }
+    },
+  };
+
+  const TMDBAPI = {
+    BASE: 'https://api.themoviedb.org/3',
+    async _get(path) {
+      const r = await window.xtream.fetch(this.BASE + path, {
+        headers: { 'Authorization': 'Bearer ' + TMDB_TOKEN, 'Content-Type': 'application/json;charset=utf-8' }
+      });
+      const status = r.status || r.statusCode;
+      if (!r.ok && status !== 200) {
+        vodErr('TMDB request failed:', path, '→ status', status, 'body:', String(r.body || '').slice(0, 300));
+        throw new Error('TMDB error ' + status);
+      }
+      return safeJsonParse(r.body, 'TMDB ' + path);
+    },
+    async findByImdb(imdbId) {
+      const data = await this._get('/find/' + encodeURIComponent(imdbId) + '?external_source=imdb_id');
+      return (data.movie_results && data.movie_results[0]) || (data.tv_results && data.tv_results[0]) || null;
+    },
+    async searchMovie(title, year) {
+      const q = '/search/movie?query=' + encodeURIComponent(title) + (year ? '&year=' + encodeURIComponent(year) : '');
+      const data = await this._get(q);
+      return (data.results && data.results[0]) || null;
+    },
+    async searchShow(title, year) {
+      const q = '/search/tv?query=' + encodeURIComponent(title) + (year ? '&first_air_date_year=' + encodeURIComponent(year) : '');
+      const data = await this._get(q);
+      return (data.results && data.results[0]) || null;
+    },
+    // Fetch extended details for a known TMDB id: clearlogo image, runtime,
+    // content certification (e.g. "M", "PG-13"), and release date — everything
+    // the spotlight banner needs beyond the basic search/find result.
+    async movieDetails(id) {
+      return this._get(`/movie/${id}?append_to_response=images,release_dates&include_image_language=en,null`);
+    },
+    async showDetails(id) {
+      return this._get(`/tv/${id}?append_to_response=images,content_ratings&include_image_language=en,null`);
+    },
+    // Pick the best clearlogo (transparent PNG title treatment) from a TMDB
+    // images response: prefer English, fall back to language-less ("null"), then any.
+    pickLogo(images) {
+      const logos = (images && images.logos) || [];
+      if (!logos.length) return '';
+      const byLang = (lang) => logos.find(l => l.iso_639_1 === lang);
+      const best = byLang('en') || byLang(null) || logos[0];
+      return best && best.file_path ? (TMDB_LOGO_IMG + best.file_path) : '';
+    },
+    // US certification, e.g. "PG-13" / "R" / "TV-MA" — falls back to the first
+    // country that has one set if US isn't present.
+    pickCertification(detail, isShow) {
+      if (isShow) {
+        const ratings = (detail.content_ratings && detail.content_ratings.results) || [];
+        const us = ratings.find(r => r.iso_3166_1 === 'US') || ratings.find(r => r.rating);
+        return (us && us.rating) || '';
+      }
+      const dates = (detail.release_dates && detail.release_dates.results) || [];
+      const us = dates.find(r => r.iso_3166_1 === 'US') || dates.find(r => (r.release_dates || []).some(d => d.certification));
+      const cert = us && (us.release_dates || []).map(d => d.certification).find(Boolean);
+      return cert || '';
+    },
+    // Derive a human-readable release status for movies from TMDB's
+    // `release_dates` payload — each entry has a numeric `type`:
+    //   1 = premiere, 2 = theatrical (limited), 3 = theatrical,
+    //   4 = digital, 5 = physical, 6 = TV
+    // We compare each type's earliest date against today to figure out
+    // whether the movie is still in theaters, out digitally/on disc, etc.
+    // Shows don't have this concept, so callers should skip them.
+    pickReleaseStatus(detail) {
+      const countries = (detail.release_dates && detail.release_dates.results) || [];
+      if (!countries.length) return '';
+      const now = Date.now();
+      const earliestOfType = (type) => {
+        let best = null;
+        for (const c of countries) {
+          for (const d of (c.release_dates || [])) {
+            if (d.type !== type || !d.release_date) continue;
+            const t = new Date(d.release_date).getTime();
+            if (!isNaN(t) && (best === null || t < best)) best = t;
+          }
+        }
+        return best;
+      };
+      const theatrical = earliestOfType(3) || earliestOfType(2) || earliestOfType(1);
+      const digital = earliestOfType(4);
+      const physical = earliestOfType(5);
+      const homeRelease = [digital, physical].filter(t => t !== null).sort((a, b) => a - b)[0] || null;
+
+      if (homeRelease !== null && homeRelease <= now) return 'Available to Rent or Buy';
+      if (theatrical !== null && theatrical <= now) {
+        if (homeRelease !== null) return 'In Theaters';
+        return 'In Theaters';
+      }
+      if (theatrical !== null && theatrical > now) return 'Coming Soon';
+      return '';
+    },
+  };
+
+  // In-memory cache of TMDB lookups, keyed by IMDb ID (preferred) or title+year+kind.
+  // Caches the lookup Promise itself so concurrent card renders for the same
+  // title share one network request.
+  const _tmdbCache = new Map();
+  function tmdbLookup(entry, kind) {
+    const imdb = vodImdbOf(entry);
+    const title = vodTitleOf(entry);
+    const year = vodYearOf(entry);
+    const key = imdb ? ('imdb:' + imdb) : (kind + ':' + title.toLowerCase() + ':' + year);
+    if (_tmdbCache.has(key)) return _tmdbCache.get(key);
+    const p = (async () => {
+      try {
+        let result = null;
+        if (imdb) result = await TMDBAPI.findByImdb(imdb).catch(() => null);
+        if (!result && title) {
+          result = (kind === 'show')
+            ? await TMDBAPI.searchShow(title, year).catch(() => null)
+            : await TMDBAPI.searchMovie(title, year).catch(() => null);
+        }
+        if (!result) return null;
+        const isShow = kind === 'show';
+        const meta = {
+          poster: result.poster_path ? (TMDB_IMG + result.poster_path) : '',
+          backdrop: result.backdrop_path ? (TMDB_BACKDROP_IMG + result.backdrop_path) : '',
+          overview: result.overview || '',
+          rating: typeof result.vote_average === 'number' ? result.vote_average : 0,
+          logo: '', runtime: 0, certification: '', releaseStatus: '',
+          releaseDate: result.release_date || result.first_air_date || '',
+        };
+        // Pull richer details (clearlogo, runtime, certification) in a second
+        // call keyed off the TMDB id we just resolved — best-effort, never blocks the card.
+        try {
+          const detail = isShow ? await TMDBAPI.showDetails(result.id) : await TMDBAPI.movieDetails(result.id);
+          meta.logo = TMDBAPI.pickLogo(detail.images) || '';
+          meta.certification = TMDBAPI.pickCertification(detail, isShow) || '';
+          meta.releaseDate = detail.release_date || detail.first_air_date || meta.releaseDate;
+          if (!isShow) {
+            meta.releaseStatus = TMDBAPI.pickReleaseStatus(detail) || '';
+            meta.runtime = typeof detail.runtime === 'number' ? detail.runtime : 0;
+          } else if (Array.isArray(detail.episode_run_time) && detail.episode_run_time.length) {
+            meta.runtime = detail.episode_run_time[0];
+          }
+        } catch (e) { /* details are a nice-to-have — ignore failures */ }
+        return meta;
+      } catch (e) { return null; }
+    })();
+    _tmdbCache.set(key, p);
+    return p;
+  }
+
+  // ---- Spotlight metadata formatting helpers ----
+  function vodFormatRuntime(mins) {
+    mins = Number(mins) || 0;
+    if (!mins) return '';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h && m) return `${h} hr ${m} mins`;
+    if (h) return `${h} hr`;
+    return `${m} mins`;
+  }
+  function vodFormatDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateStr;
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${mm}/${dd}/${d.getFullYear()}`;
+  }
+  // Render a 0–10 TMDB rating as a 5-star glyph string (★ full, ⯨ half, ☆ empty)
+  function vodStarString(rating) {
+    const r = Math.max(0, Math.min(10, Number(rating) || 0)) / 2;
+    const full = Math.floor(r);
+    const half = (r - full) >= 0.5 ? 1 : 0;
+    const empty = 5 - full - half;
+    return '★'.repeat(full) + (half ? '⯨' : '') + '☆'.repeat(empty);
+  }
+
+  function vodPosterStyle(item) {
+    if (item && item._poster) return `background-image:url('${item._poster}')`;
+    return '';
+  }
+  function vodTitleOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.title) || '';
+  }
+  function vodYearOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.year) || '';
+  }
+  function vodOverviewOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && (m.overview || m.tagline)) || '';
+  }
+  function vodImdbOf(entry) {
+    const m = entry.movie || entry.show || entry;
+    return (m && m.ids && m.ids.imdb) || '';
+  }
+
+  function vodCard(entry, kind) {
+    const title = vodTitleOf(entry);
+    const year = vodYearOf(entry);
+    const card = document.createElement('div');
+    card.className = 'vod-card';
+    card.tabIndex = 0;
+    card.innerHTML = `
+      <div class="vod-card-poster" style="${vodPosterStyle(entry)}">${vodPosterStyle(entry) ? '' : escapeHtml(title)}</div>
+      <div class="vod-card-title">${escapeHtml(title)}</div>
+      <div class="vod-card-sub">${escapeHtml(String(year || ''))}${kind ? ' · ' + kind : ''}</div>`;
+    card.addEventListener('click', () => {
+      vodLog('Card clicked:', { title, year, kind, imdb: vodImdbOf(entry) });
+      try {
+        showVodSpotlight(entry, kind);
+      } catch (e) {
+        vodErr('showVodSpotlight threw:', e && (e.stack || e.message || e));
+      }
+    });
+    if (!entry._poster) {
+      tmdbLookup(entry, kind).then(meta => {
+        if (!meta) return;
+        if (meta.poster) entry._poster = meta.poster;
+        if (meta.backdrop) entry._backdrop = meta.backdrop;
+        if (meta.overview && !entry._tmdbOverview) entry._tmdbOverview = meta.overview;
+        if (typeof meta.rating === 'number') entry._tmdbRating = meta.rating;
+        const posterEl = card.querySelector('.vod-card-poster');
+        if (posterEl && entry._poster) {
+          posterEl.style.backgroundImage = `url('${entry._poster}')`;
+          posterEl.textContent = '';
+        }
+        if (State.vodFocused && State.vodFocused.entry === entry) showVodSpotlight(entry, kind);
+      });
+    }
+    return card;
+  }
+
+  function vodRenderSpotlightFields(entry, kind) {
+    const title = vodTitleOf(entry);
+    const overview = vodOverviewOf(entry) || entry._tmdbOverview;
+    const logoEl = $('#vod-spotlight-logo');
+    const titleEl = $('#vod-spotlight-title');
+    if (entry._logo) {
+      logoEl.src = entry._logo;
+      logoEl.style.display = '';
+      titleEl.style.display = 'none';
+    } else {
+      logoEl.style.display = 'none';
+      titleEl.style.display = '';
+      titleEl.textContent = title;
+    }
+    // Meta row: ⓘ · stars · date · certification pill · runtime
+    const year = vodYearOf(entry);
+    const dateStr = vodFormatDate(entry._releaseDate) || (year ? String(year) : '');
+    const runtimeStr = vodFormatRuntime(entry._runtime);
+    const metaParts = [];
+    metaParts.push('<span class="pill">i</span>');
+    if (kind === 'movie' && entry._releaseStatus) {
+      const cls = entry._releaseStatus === 'In Theaters' ? 'in-theaters' : 'on-digital';
+      metaParts.push(`<span class="pill release-status ${cls}">${escapeHtml(entry._releaseStatus)}</span>`);
+    }
+    if (typeof entry._tmdbRating === 'number' && entry._tmdbRating > 0) {
+      metaParts.push(`<span class="stars">${vodStarString(entry._tmdbRating)}</span>`);
+    }
+    if (dateStr) metaParts.push(`<span>${escapeHtml(dateStr)}</span>`);
+    if (entry._certification) metaParts.push(`<span class="pill">${escapeHtml(entry._certification)}</span>`);
+    if (runtimeStr) metaParts.push(`<span>${escapeHtml(runtimeStr)}</span>`);
+    if (!dateStr && !runtimeStr && !entry._certification) {
+      metaParts.push(`<span>${escapeHtml(kind === 'show' ? 'Series' : 'Movie')}</span>`);
+    }
+    $('#vod-spotlight-meta').innerHTML = metaParts.join('<span class="dot"> · </span>');
+    $('#vod-spotlight-overview').textContent = overview || 'No synopsis available.';
+    // Score badges: TMDB rating (e.g. "7.5") + a percent score derived from it
+    const scoresEl = $('#vod-spotlight-scores');
+    if (typeof entry._tmdbRating === 'number' && entry._tmdbRating > 0) {
+      const tmdbScore = entry._tmdbRating.toFixed(1);
+      const percent = Math.round(entry._tmdbRating * 10);
+      scoresEl.innerHTML = `
+        <span class="score"><span class="score-icon tmdb">★</span>${escapeHtml(tmdbScore)}</span>
+        <span class="score"><span class="score-icon percent">%</span>${percent}%</span>`;
+      scoresEl.style.display = '';
+    } else {
+      scoresEl.innerHTML = '';
+      scoresEl.style.display = 'none';
+    }
+  }
+
+  function showVodSpotlight(entry, kind) {
+    vodLog('showVodSpotlight:', { title: vodTitleOf(entry), kind, hasPoster: !!entry._poster, hasBackdrop: !!entry._backdrop, hasLogo: !!entry._logo });
+    State.vodFocused = { entry, kind };
+    const spotEl = $('#vod-spotlight');
+    if (!spotEl) { vodErr('showVodSpotlight: #vod-spotlight element not found in DOM!'); return; }
+    // Scroll the spotlight into view so clicking a card from a lower rail
+    // visibly shows the selected title — otherwise it just updates off-screen.
+    if (spotEl) setTimeout(() => { try { spotEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 0);
+    $('#vod-spotlight').style.display = '';
+    vodRenderSpotlightFields(entry, kind);
+    const bg = $('#vod-spotlight-bg');
+    bg.style.backgroundImage = entry._backdrop ? `url('${entry._backdrop}')` : (entry._poster ? `url('${entry._poster}')` : '');
+    const needsLookup = !entry._backdrop || !entry._tmdbOverview || entry._logo === undefined || entry._runtime === undefined;
+    if (needsLookup) {
+      tmdbLookup(entry, kind).then(meta => {
+        if (!meta || !State.vodFocused || State.vodFocused.entry !== entry) return;
+        if (meta.poster) entry._poster = meta.poster;
+        if (meta.backdrop) entry._backdrop = meta.backdrop;
+        if (meta.overview && !entry._tmdbOverview) entry._tmdbOverview = meta.overview;
+        if (typeof meta.rating === 'number') entry._tmdbRating = meta.rating;
+        entry._logo = meta.logo || entry._logo || '';
+        entry._runtime = meta.runtime || entry._runtime || 0;
+        entry._certification = meta.certification || entry._certification || '';
+        entry._releaseDate = meta.releaseDate || entry._releaseDate || '';
+        entry._releaseStatus = meta.releaseStatus || entry._releaseStatus || '';
+        if (entry._backdrop) bg.style.backgroundImage = `url('${entry._backdrop}')`;
+        else if (entry._poster) bg.style.backgroundImage = `url('${entry._poster}')`;
+        vodRenderSpotlightFields(entry, kind);
+      });
+    }
+  }
+
+  $('#vod-spotlight-play').addEventListener('click', () => {
+    const f = State.vodFocused;
+    vodLog('Play button clicked. Focused entry:', f && { title: vodTitleOf(f.entry), kind: f.kind, imdb: vodImdbOf(f.entry) });
+    if (!f) { vodWarn('Play clicked but nothing is focused (State.vodFocused is empty).'); return; }
+    const imdb = vodImdbOf(f.entry);
+    if (!Storage.isRealDebridConnected()) {
+      vodWarn('Play blocked: Real-Debrid not connected.');
+      toast('Connect Real-Debrid in Settings → VOD Integrations to play titles.');
+      return;
+    }
+    if (!imdb) {
+      vodWarn('Play blocked: no IMDb ID resolvable for entry', f.entry);
+      toast("Couldn't resolve an IMDb ID for this title — try connecting Trakt for richer metadata.");
+      return;
+    }
+    if (f.kind === 'show') {
+      vodWarn('Play blocked: series playback not yet supported.');
+      toast('Series playback is coming soon — movies are supported first.');
+      return;
+    }
+    resolveAndPlayMovie(imdb, vodTitleOf(f.entry), f.entry);
+  });
+
+  /* ---- Stream sourcing: Torrentio / AIOStreams ---- */
+  // Generic engine: queries every enabled provider (in priority order) via the
+  // standard Stremio addon route {baseUrl}/stream/{type}/{imdbId}.json, then
+  // aggregates results. No scraper is hardcoded — providers are entirely
+  // user-supplied (see ProviderManager / Settings → Stream providers). One bad
+  // source logs an error and is skipped; the rest still return results.
+  const StreamScrapers = {
+    async _queryProvider(provider, type, imdbId) {
+      const url = `${provider.baseUrl}/stream/${type}/${imdbId}.json`;
+      vodLog('Querying provider:', provider.name, url);
+      const r = await window.xtream.fetch(url, { headers: { 'Accept': 'application/json' } });
+      const status = r.status || r.statusCode;
+      vodLog('Provider response:', provider.name, '→ status', status, 'bytes:', (r.body || '').length);
+      if (status >= 400) {
+        vodErr('Provider returned an error status:', provider.name, status, 'body:', String(r.body || '').slice(0, 300));
+      }
+      const data = safeJsonParse(r.body, `Provider (${provider.name})`);
+      const streams = Array.isArray(data.streams) ? data.streams : [];
+      vodLog('Provider streams found:', provider.name, streams.length);
+      // Tag each stream with its source provider so the UI/Real-Debrid layer
+      // can show where it came from and so duplicates can be told apart.
+      return streams.map(s => Object.assign({ _providerName: provider.name, _providerId: provider.id }, s));
+    },
+    async _queryAll(type, imdbId) {
+      const providers = Storage.getEnabledProviders();
+      if (!providers.length) {
+        vodWarn('No stream providers are enabled — add one in Settings → Stream providers.');
+        toast('No stream providers configured — add one in Settings to find playable links.');
+        return [];
+      }
+      const results = [];
+      let anySucceeded = false;
+      for (const provider of providers) {
+        try {
+          const streams = await this._queryProvider(provider, type, imdbId);
+          anySucceeded = true;
+          results.push(...streams);
+        } catch (e) {
+          vodErr('Provider failed, skipping:', provider.name, e.message || e);
+        }
+      }
+      if (!anySucceeded) {
+        // A common cause: the only enabled provider(s) are currently behind a
+        // Cloudflare challenge the in-app bypass can't solve (this happens to
+        // Torrentio periodically). Point the user at the fix — add another
+        // provider — rather than leaving them stuck on a dead source.
+        vodWarn('All enabled providers failed — they may be Cloudflare-blocked or down. ' +
+                'Try adding another provider in Settings → Stream providers (search "Stremio addons" ' +
+                'for currently-working manifest URLs — e.g. MediaFusion, Comet, Nuvio Streams).');
+        toast('All stream providers failed to respond (likely Cloudflare-blocked or down) — ' +
+              'try adding another provider in Settings → Stream providers.', 6000);
+      }
+      vodLog('Combined provider streams:', results.length, 'from', providers.length, 'provider(s)');
+      return results;
+    },
+    async queryMovie(imdbId) {
+      return this._queryAll('movie', imdbId);
+    },
+    async querySeries(imdbId, season, episode) {
+      const id = (season != null && episode != null) ? `${imdbId}:${season}:${episode}` : imdbId;
+      return this._queryAll('series', id);
+    },
+  };
+
+  function parseStreamResult(s) {
+    // Torrentio/AIOStreams "stream" objects pack a rich, emoji-tagged, multi-line
+    // info blob into `title` (size, codecs, runtime, seeders, age, source,
+    // languages, filename/path), with a short provider+quality label in `name`.
+    const blob = s.title || s.description || s.name || '';
+    const lines = blob.split('\n').map(l => l.trim()).filter(Boolean);
+    const label = (s.name || '').split('\n')[0] || lines[0] || 'Unknown';
+
+    const sizeMatch    = blob.match(/💾\s*([\d.]+\s*[KMGT]?i?B)/i) || blob.match(/📦\s*([\d.]+\s*[KMGT]?i?B(?:\s*\/\s*[\d.]+\s*[KMGT]?i?B)?)/i) || blob.match(/([\d.]+\s*[KMGT]i?B)/i);
+    const seedMatch    = blob.match(/👤\s*(\d+)/) || blob.match(/👥\s*(\d+)/) || blob.match(/seeds?\D{0,3}(\d+)/i);
+    const qualityMatch = blob.match(/\b(4K|2160p|1080p|720p|480p)\b/i);
+    const runtimeMatch = blob.match(/⏱️?\s*([\dhms:\s]+(?:[hms]))/i);
+    const ageMatch     = blob.match(/📅\s*([^\s|]+)/);
+    const sourceMatch  = blob.match(/🔍\s*([^\s|📦📅👥👤]+)/);
+    const langMatch    = blob.match(/🌎\s*([^\n]+)/) || blob.match(/🌐\s*([^\n]+)/);
+    // The filename/path is typically the longest line and contains a file extension.
+    const fileLine = lines.slice().reverse().find(l => /\.\w{2,4}$/.test(l)) ||
+                     (s.behaviorHints && s.behaviorHints.filename) || '';
+
+    return {
+      raw: s,
+      infoHash: s.infoHash || '',
+      // Some providers (e.g. AIOStreams, MediaFusion configured with a debrid
+      // service) resolve everything server-side and just hand back a direct,
+      // ready-to-play URL — no torrent hash for us to resolve ourselves.
+      url: s.url || '',
+      fileIdx: (typeof s.fileIdx === 'number') ? s.fileIdx : null,
+      title: label,
+      lines,
+      filename: fileLine,
+      size: sizeMatch ? sizeMatch[1].replace(/\s+/g, ' ') : '',
+      seeders: seedMatch ? parseInt(seedMatch[1], 10) : 0,
+      quality: qualityMatch ? qualityMatch[1].toUpperCase() : '',
+      runtime: runtimeMatch ? runtimeMatch[1].trim() : '',
+      age: ageMatch ? ageMatch[1] : '',
+      source: sourceMatch ? sourceMatch[1] : '',
+      languages: langMatch ? langMatch[1].trim() : '',
+    };
+  }
+
+  function pickBestStream(parsed) {
+    const rank = q => ({'4K':4,'2160P':4,'1080P':3,'720P':2,'480P':1}[String(q).toUpperCase()] || 0);
+    return parsed.slice().sort((a, b) => (rank(b.quality) - rank(a.quality)) || (b.seeders - a.seeders))[0];
+  }
+
+  function showStreamPickerModal(parsedList) {
+    return new Promise((resolve) => {
+      const bg = document.createElement('div');
+      bg.className = 'modal-bg show';
+      bg.innerHTML = `
+        <div class="modal">
+          <header><h2>Choose a stream</h2><button class="ghost" id="vod-picker-close">✕</button></header>
+          <section>
+            <div style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto;">
+              ${parsedList.map((p, i) => {
+                // Show every metadata line the provider sent us (size, codecs,
+                // runtime/seeders/source, languages, filename, …) — mirrors how
+                // Torrentio/AIOStreams format their stream titles.
+                const metaLines = (p.lines && p.lines.length ? p.lines : [p.title]).slice(0, 6);
+                return `
+                <button class="vod-pick-row" data-idx="${i}" style="text-align:left; display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:8px; background:var(--bg-2); border:1px solid var(--line);">
+                  <span style="font-weight:600; font-size:13px;">${escapeHtml(p.title)}</span>
+                  ${metaLines.map((l, idx) => `<span style="font-size:11.5px; color:${idx === metaLines.length - 1 && p.filename === l ? 'var(--dim)' : 'var(--muted)'}; ${p.filename === l ? 'word-break:break-all; font-family: var(--mono, monospace);' : ''}">${escapeHtml(l)}</span>`).join('')}
+                </button>`;
+              }).join('')}
+            </div>
+          </section>
+        </div>`;
+      document.body.appendChild(bg);
+      const cleanup = (val) => { bg.remove(); resolve(val); };
+      bg.querySelector('#vod-picker-close').addEventListener('click', () => cleanup(null));
+      bg.addEventListener('mousedown', (e) => { if (e.target === bg) cleanup(null); });
+      bg.querySelectorAll('.vod-pick-row').forEach(btn => {
+        btn.addEventListener('click', () => cleanup(parsedList[+btn.dataset.idx]));
+      });
+    });
+  }
+
+  /* ---- Real-Debrid client ---- */
+  const RealDebridAPI = {
+    BASE: 'https://api.real-debrid.com/rest/1.0',
+    async _bearerToken() {
+      const rd = Storage.getRealDebrid();
+      // Logged in via the QR/device-code flow — refresh the access token if it's
+      // expired (or about to be) using the per-device credentials we were issued.
+      if (rd.accessToken && rd.refreshToken && rd.clientId && rd.clientSecret) {
+        if (!rd.expiresAt || Date.now() > (rd.expiresAt - 60000)) {
+          try {
+            const r = await window.xtream.fetch('https://api.real-debrid.com/oauth/v2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+              body: new URLSearchParams({
+                client_id: rd.clientId,
+                client_secret: rd.clientSecret,
+                code: rd.refreshToken,
+                grant_type: 'http://oauth.net/grant_type/device/1.0'
+              }).toString()
+            });
+            if ((r.status || r.statusCode) === 200) {
+              const tok = JSON.parse(r.body || '{}');
+              if (tok.access_token) {
+                Storage.setRealDebridTokens({
+                  accessToken: tok.access_token,
+                  refreshToken: tok.refresh_token || rd.refreshToken,
+                  expiresAt: Date.now() + ((tok.expires_in || 0) * 1000)
+                });
+                return tok.access_token;
+              }
+            }
+          } catch (e) { /* fall through and try the existing token anyway */ }
+        }
+        return rd.accessToken;
+      }
+      // Legacy: a manually-pasted static API token still works.
+      if (rd.apiKey) return rd.apiKey;
+      if (rd.accessToken) return rd.accessToken;
+      throw new Error('Real-Debrid is not connected.');
+    },
+    async _call(path, opts = {}) {
+      const token = await this._bearerToken();
+      const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
+      vodLog('Real-Debrid request:', opts.method || 'GET', path);
+      const r = await window.xtream.fetch(this.BASE + path, Object.assign({}, opts, { headers }));
+      const status = r.status || r.statusCode;
+      vodLog('Real-Debrid response:', path, '→ status', status, 'bytes:', (r.body || '').length);
+      if (status >= 400) {
+        vodErr('Real-Debrid error:', path, status, 'body:', String(r.body || '').slice(0, 300));
+        throw new Error('Real-Debrid error ' + status + (r.body ? (': ' + r.body.slice(0, 160)) : ''));
+      }
+      if (!r.body) return null;
+      return safeJsonParse(r.body, 'Real-Debrid ' + path);
+    },
+    addMagnet(magnet) {
+      return this._call('/torrents/addMagnet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'magnet=' + encodeURIComponent(magnet)
+      });
+    },
+    torrentInfo(id) { return this._call('/torrents/info/' + id); },
+    selectFiles(id, fileIds) {
+      return this._call('/torrents/selectFiles/' + id, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'files=' + encodeURIComponent(fileIds)
+      });
+    },
+    unrestrictLink(link) {
+      return this._call('/unrestrict/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'link=' + encodeURIComponent(link)
+      });
+    }
+  };
+
+  function magnetFromInfoHash(hash, title) {
+    return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(title || '')}`;
+  }
+
+  async function debridResolve(parsedStream, onStatus) {
+    if (!parsedStream.infoHash) throw new Error('This result has no torrent hash to send to Real-Debrid.');
+    const magnet = magnetFromInfoHash(parsedStream.infoHash, parsedStream.title);
+    vodLog('debridResolve: magnet built from infoHash', parsedStream.infoHash);
+
+    onStatus('Adding to Real-Debrid…');
+    const added = await RealDebridAPI.addMagnet(magnet);
+    vodLog('addMagnet result:', added);
+    const torrentId = added && added.id;
+    if (!torrentId) throw new Error('Real-Debrid did not return a torrent ID.');
+
+    onStatus('Selecting the largest file…');
+    let info = await RealDebridAPI.torrentInfo(torrentId);
+    const files = (info && info.files) || [];
+    let chosen = files.slice().sort((a, b) => (b.bytes || 0) - (a.bytes || 0))[0];
+    const fileIds = chosen ? String(chosen.id) : 'all';
+    await RealDebridAPI.selectFiles(torrentId, fileIds);
+
+    onStatus('Waiting for Real-Debrid to cache the torrent…');
+    const deadline = Date.now() + 5 * 60 * 1000;
+    let link = null;
+    while (Date.now() < deadline) {
+      info = await RealDebridAPI.torrentInfo(torrentId);
+      if (info.status === 'downloaded' && info.links && info.links.length) {
+        link = info.links[0];
+        break;
+      }
+      if (info.status === 'error' || info.status === 'magnet_error' || info.status === 'dead') {
+        throw new Error('Real-Debrid could not process this torrent (status: ' + info.status + ').');
+      }
+      onStatus(`Real-Debrid status: ${info.status}${info.progress != null ? ' (' + info.progress + '%)' : ''}…`);
+      await new Promise(res => setTimeout(res, 4000));
+    }
+    if (!link) throw new Error('Timed out waiting for Real-Debrid to cache this torrent.');
+
+    onStatus('Unlocking direct link…');
+    const unrestricted = await RealDebridAPI.unrestrictLink(link);
+    if (!unrestricted || !unrestricted.download) throw new Error('Real-Debrid did not return a playable link.');
+    return unrestricted.download;
+  }
+
+  // --- Native VOD player (mpv) --------------------------------------------
+  // Browsers can't natively demux .mkv, decode rip-codecs (DTS/TrueHD/AC-3/
+  // E-AC-3), or render embedded styled subtitles (ASS/PGS) — no amount of
+  // ffmpeg-remux tuning changes that fundamental mismatch. mpv (built on the
+  // same FFmpeg decoders plus libass) handles all of it natively with proper
+  // A/V sync and instant track switching, so when it's installed we hand VOD
+  // playback to it directly: it opens in its own native window (true pixel-
+  // level embedding inside Electron isn't feasible cross-platform without
+  // native addons) while we keep a lightweight "now playing externally" state
+  // here so the rest of the app (back button, library, Esc) still behaves.
+  let _mpvUnsub = null;
+  let _mpvActive = false;
+
+  function teardownMpvWatch() {
+    if (_mpvUnsub) { try { _mpvUnsub(); } catch (e) {} _mpvUnsub = null; }
+    _mpvActive = false;
+  }
+
+  // Attempts native playback via mpv. Resolves true if mpv took over,
+  // false if it's unavailable/failed (caller should fall back to in-app).
+  async function tryPlayVodWithMpv(url, title) {
+    if (!(window.xtream && window.xtream.mpvAvailable && window.xtream.mpvPlay)) return false;
+    let available = false;
+    try { available = await window.xtream.mpvAvailable(); } catch (e) {}
+    if (!available) return false;
+
+    let res;
+    try { res = await window.xtream.mpvPlay(url, title); } catch (e) { res = { ok: false, message: e && e.message }; }
+    if (!res || !res.ok) return false;
+
+    teardownMpvWatch();
+    _mpvActive = true;
+    if (window.xtream.onMpvEvent) {
+      _mpvUnsub = window.xtream.onMpvEvent((data) => {
+        if (!data || !_mpvActive) return;
+        if (data.event === 'xtream-closed' || data.event === 'xtream-error' ||
+            (data.event === 'property-change' && data.name === 'eof-reached' && data.data === true)) {
+          // mpv window closed (user closed it, playback ended, or it crashed)
+          // — return to the VOD library the same way exitVodPlayback would.
+          teardownMpvWatch();
+          if (State.mode === 'vod' && $('#view-player') && !$('#view-player').classList.contains('hidden')) {
+            const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+            State.currentChannel = null;
+            setView('vod');
+          }
+        }
+      });
+    }
+    toast('Playing in mpv — native playback for the best .mkv/audio/subtitle support.');
+    return true;
+  }
+
+  // --- Embedded native VOD player (libmpv via native/mpv-addon) -----------
+  // The real "embedded" path: native/mpv-addon decodes and renders frames
+  // in-process (libmpv's software-render API, RGBA buffers) and streams them
+  // here over IPC; we paint each one onto <canvas id="mpv2-canvas"> with
+  // putImageData. Video is genuinely inside the app window — unlike the
+  // external-`mpv` fallback above, which opens mpv's own native window.
+  // Because this surface isn't an HTMLVideoElement, it can't reuse
+  // State.player's transport — it gets its own minimal overlay (play/pause,
+  // seek, volume, exit) drawn on top of the canvas, driven by mpv IPC
+  // commands/properties. Requires the addon to be compiled on this machine
+  // (see native/mpv-addon/BUILD.md); falls back to external mpv / in-app
+  // playback when it isn't.
+  const Mpv2 = {
+    active: false,
+    unsub: null,
+    canvas: null, ctx: null,
+    imageData: null,
+    paused: true, position: 0, duration: 0, volume: 80,
+    seeking: false,
+    resizeObs: null,
+
+    // ---- debug instrumentation ----
+    // Toggle with Ctrl+Shift+D while the embedded player is active. Mirrors
+    // a rolling log buffer the user can copy/paste to share, plus an
+    // on-screen HUD with live stats — aimed at the four reported symptoms:
+    // delayed autoplay, stutter, seek bar not tracking, and spinner/hangs
+    // (the last of which is most likely `paint()` blocking the main thread,
+    // so paint calls are timed and any slow ones are flagged).
+    debugOn: false,
+    _dbgBuf: [],
+    _dbgEl: null,
+    _frameStats: { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 },
+
+    dlog(...args) {
+      const ts = new Date().toISOString().slice(11, 23);
+      const line = `[${ts}] ` + args.map((a) => {
+        if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+        return String(a);
+      }).join(' ');
+      this._dbgBuf.push(line);
+      if (this._dbgBuf.length > 400) this._dbgBuf.splice(0, this._dbgBuf.length - 400);
+      if (this.debugOn) console.debug('[Mpv2]', line);
+      this._renderHud();
+    },
+
+    async toggleDebug() {
+      this.debugOn = !this.debugOn;
+      try { window.xtream.mpv2Debug && window.xtream.mpv2Debug(this.debugOn); } catch (e) {}
+      this._frameStats = { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 };
+      if (this.debugOn) {
+        this._buildHud();
+        this.dlog('debug logging ENABLED — also enabled in main process (mpv2:debug)');
+        toast('Native-player debug logging on — press Ctrl+Shift+D again to copy & turn off.');
+      } else {
+        this.dlog('debug logging disabled — copying log to clipboard');
+        const text = this._dbgBuf.join('\n');
+        try { await navigator.clipboard.writeText(text); toast(`Copied ${this._dbgBuf.length} debug log lines to clipboard.`); }
+        catch (e) { toast('Could not copy to clipboard — open DevTools console to view the log.'); }
+        this._removeHud();
+      }
+    },
+
+    _buildHud() {
+      if (this._dbgEl || !this.canvas) return;
+      const el = document.createElement('div');
+      el.id = 'mpv2-debug-hud';
+      el.style.cssText = 'position:absolute;top:10px;left:10px;z-index:50;max-width:46%;'
+        + 'background:rgba(0,0,0,0.72);color:#9f9;font:11px/1.4 ui-monospace,Menlo,monospace;'
+        + 'padding:8px 10px;border-radius:6px;white-space:pre-wrap;pointer-events:none;'
+        + 'max-height:60%;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.4);';
+      (this.canvas.parentElement || document.body).appendChild(el);
+      this._dbgEl = el;
+      this._renderHud();
+    },
+    _removeHud() {
+      if (this._dbgEl) { try { this._dbgEl.remove(); } catch (e) {} this._dbgEl = null; }
+    },
+    _renderHud() {
+      if (!this._dbgEl) return;
+      const fs = this._frameStats;
+      const head = `mpv2 debug — Ctrl+Shift+D to copy log & stop\n`
+        + `paused=${this.paused} pos=${(this.position || 0).toFixed(1)}/${(this.duration || 0).toFixed(1)} `
+        + `seeking=${this.seeking} vol=${this.volume}\n`
+        + `paint: last=${fs.lastPaintMs.toFixed(1)}ms max=${fs.maxPaintMs.toFixed(1)}ms `
+        + `slow(>16ms)=${fs.slowCount} fps≈${fs.fps || 0}\n`
+        + '─'.repeat(40) + '\n';
+      const tail = this._dbgBuf.slice(-14).join('\n');
+      this._dbgEl.textContent = head + tail;
+    },
+
+    // Cap the render-surface resolution mpv is asked to produce. Each frame
+    // crosses IPC as a raw RGBA buffer (w*h*4 bytes) and is then blitted with
+    // a synchronous putImageData on the main/UI thread. At full retina size
+    // (e.g. 2940x1750 ≈ 20.6MB/frame, ~577MB/s @ 28fps) that workload is large
+    // enough to stall the renderer's event loop — which is what produces the
+    // system-wide spinning-cursor / unresponsive-input symptom, since Chromium
+    // can't service input/compositor work while busy copying & painting.
+    // The canvas is scaled to the wrap element via CSS regardless, so there's
+    // no visual benefit to exceeding ~1080p of surface — clamp the longest
+    // edge there and let CSS upscale on higher-DPI displays.
+    MAX_SURFACE_EDGE: 1920,
+    clampSurfaceSize(w, h) {
+      const longest = Math.max(w, h);
+      if (longest <= this.MAX_SURFACE_EDGE) return { w, h };
+      const scale = this.MAX_SURFACE_EDGE / longest;
+      return { w: Math.max(2, Math.round(w * scale)), h: Math.max(2, Math.round(h * scale)) };
+    },
+
+    teardown() {
+      if (this.debugOn) { this.dlog('teardown()'); }
+      if (this.unsub) { try { this.unsub(); } catch (e) {} this.unsub = null; }
+      if (this.resizeObs) { try { this.resizeObs.disconnect(); } catch (e) {} this.resizeObs = null; }
+      if (this.canvas) { this.canvas.classList.add('hidden'); this.ctx = null; this.imageData = null; }
+      try { closeAllTrackMenus(); } catch (e) {}
+      this._removeHud();
+      this.active = false;
+      this.tracks = null;
+      this._pendingFrame = null;
+      this._paintScheduled = false;
+      this.paused = true; this.position = 0; this.duration = 0; this.seeking = false;
+    },
+
+    async tryStart(url, title) {
+      const t0 = performance.now();
+      if (!(window.xtream && window.xtream.mpv2Available && window.xtream.mpv2Open)) return false;
+      let available = false;
+      try { available = await window.xtream.mpv2Available(); } catch (e) {}
+      this.dlog(`tryStart: addon available=${available} (+${(performance.now() - t0).toFixed(0)}ms)`);
+      if (!available) return false;
+
+      this.canvas = $('#mpv2-canvas');
+      if (!this.canvas) return false;
+      const wrap = $('#player-wrap');
+      const rect = wrap ? wrap.getBoundingClientRect() : { width: 1280, height: 720 };
+      const dpr = window.devicePixelRatio || 1;
+      const rawW = Math.max(2, Math.round((rect.width || 1280) * dpr));
+      const rawH = Math.max(2, Math.round((rect.height || 720) * dpr));
+      const { w, h } = this.clampSurfaceSize(rawW, rawH);
+
+      let res;
+      try { res = await window.xtream.mpv2Open(url, title, w, h); }
+      catch (e) { res = { ok: false, message: e && e.message }; }
+      this.dlog(`mpv2Open(${w}x${h}) -> ok=${!!(res && res.ok)} ${res && res.message ? 'msg=' + res.message : ''} (+${(performance.now() - t0).toFixed(0)}ms total)`);
+      if (!res || !res.ok) return false;
+
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.canvas.classList.remove('hidden');
+      this.ctx = this.canvas.getContext('2d');
+      this.imageData = null;
+      this.active = true;
+      this.paused = true; this.position = 0; this.duration = 0;
+      this._pendingFrame = null;
+      this._paintScheduled = false;
+      this._frameStats = { count: 0, windowStart: 0, lastPaintMs: 0, maxPaintMs: 0, slowCount: 0 };
+
+      this.bindControls();
+      this.syncControls();
+      initVodTrackButtons();
+      this.watchResize(wrap, dpr);
+
+      if (window.xtream.onMpv2Event) {
+        this.unsub = window.xtream.onMpv2Event((payload) => this.onEvent(payload));
+      }
+      this.dlog(`tryStart complete in ${(performance.now() - t0).toFixed(0)}ms — waiting for first frame/property events`);
+      toast('Playing with the embedded native player — full .mkv/audio/subtitle support, no external app.');
+      return true;
+    },
+
+    watchResize(wrap, dpr) {
+      if (!wrap || typeof ResizeObserver === 'undefined') return;
+      this.resizeObs = new ResizeObserver(() => {
+        if (!this.active || !this.canvas) return;
+        const rect = wrap.getBoundingClientRect();
+        const rawW = Math.max(2, Math.round(rect.width * (window.devicePixelRatio || 1)));
+        const rawH = Math.max(2, Math.round(rect.height * (window.devicePixelRatio || 1)));
+        const { w, h } = this.clampSurfaceSize(rawW, rawH);
+        if (w === this.canvas.width && h === this.canvas.height) return;
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.imageData = null;
+        try { window.xtream.mpv2SetSurfaceSize(w, h); } catch (e) {}
+      });
+      this.resizeObs.observe(wrap);
+    },
+
+    onEvent(payload) {
+      if (!payload || !this.active) return;
+      switch (payload.type) {
+        // 'frame' payloads no longer arrive here — they're delivered over the
+        // dedicated zero-copy MessagePort (see onFramePortMessage / the
+        // window 'message' listener below the object) so their multi-MB
+        // ArrayBuffers never get structured-cloned through mpv2:event.
+        case 'property-change':
+          if (this.debugOn && payload.name !== 'time-pos') this.dlog(`property: ${payload.name} =`, payload.value);
+          this.onProperty(payload.name, payload.value);
+          break;
+        case 'event-stats':
+          // Diagnostic heartbeat from the native addon's DrainEvents loop —
+          // confirms whether mpv property-change events are actually being
+          // generated/drained, and surfaces the "stuck wakeupPending_" /
+          // "exception mid-drain" failure modes we were chasing.
+          if (payload.drainException) {
+            this.dlog(`*** DRAIN EXCEPTION on ${payload.eventName} (id ${payload.eventId}): ${payload.drainException}`);
+          } else {
+            this.dlog(`event-stats: drainPasses=${payload.drainPasses} propertyChanges=${payload.propertyChangeEvents} otherEvents=${payload.otherMpvEvents} drainExceptions=${payload.drainExceptions} failedWakeups=${payload.failedWakeupCalls}`);
+          }
+          break;
+        case 'event':
+          this.dlog(`mpv event: ${payload.event}`);
+          if (payload.event === 'end-file' || payload.event === 'shutdown') {
+            // Playback ended (or mpv core died) — behave like exitVodPlayback.
+            this.teardown();
+            try { window.xtream.mpv2Close && window.xtream.mpv2Close(); } catch (e) {}
+            if (State.mode === 'vod') {
+              const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+              State.currentChannel = null;
+              setView('vod');
+            }
+          }
+          break;
+        default:
+          if (this.debugOn) this.dlog('unrecognized event payload type:', payload.type, payload);
+          break;
+      }
+    },
+
+    onProperty(name, value) {
+      switch (name) {
+        case 'pause':
+          this.paused = !!value;
+          this.dlog(`pause -> ${this.paused}${this.paused ? '' : '  (mpv reports playing — UI should now show pause icon)'}`);
+          this.syncControls();
+          break;
+        case 'time-pos':
+          if (typeof value === 'number') {
+            // Logged at low frequency (once/sec) — high-frequency time-pos
+            // spam would drown out the more useful events. This is the key
+            // signal for the "seek bar doesn't track" symptom: if these
+            // stop arriving, or `seeking` stays stuck true, the bar freezes.
+            const now = Date.now();
+            if (!this._lastTimePosLog || now - this._lastTimePosLog > 1000) {
+              this._lastTimePosLog = now;
+              this.dlog(`time-pos -> ${value.toFixed(2)} (seeking=${this.seeking}, applied=${!this.seeking})`);
+            }
+            if (!this.seeking) { this.position = value; this.syncControls(); }
+          }
+          break;
+        case 'duration':
+          if (typeof value === 'number') { this.duration = value; this.dlog(`duration -> ${value.toFixed(2)}`); this.syncControls(); }
+          break;
+        case 'volume': if (typeof value === 'number') { this.volume = value; this.syncControls(); } break;
+        case 'core-idle':
+          this.dlog(`core-idle -> ${value} ${value ? '(buffering/stalled — likely cause of stop/start stutter)' : '(actively decoding)'}`);
+          break;
+        case 'seeking':
+          this.dlog(`seeking (mpv-reported) -> ${value}`);
+          break;
+        case 'eof-reached':
+          if (value) this.dlog('eof-reached -> true');
+          break;
+        case 'track-list':
+          this.tracks = Array.isArray(value) ? value : null;
+          this.dlog(`track-list -> ${this.tracks ? this.tracks.length : 0} tracks`);
+          try { VodTracks.refresh && VodTracks.refresh(); } catch (e) {}
+          break;
+      }
+    },
+
+    schedulePaint() {
+      if (this._paintScheduled) return;
+      this._paintScheduled = true;
+      requestAnimationFrame(() => {
+        this._paintScheduled = false;
+        const frame = this._pendingFrame;
+        this._pendingFrame = null;
+        if (frame) this.paint(frame);
+      });
+    },
+
+    paint(frame) {
+      if (!this.ctx || !frame || !frame.buffer || !frame.width || !frame.height) return;
+      const t0 = (this.debugOn || this._dbgEl) ? performance.now() : 0;
+      // frame.buffer now arrives as a *transferred* ArrayBuffer — it crossed
+      // every boundary (native -> addon -> main -> preload -> here) by
+      // ownership transfer, never structured-clone copying. Wrap it directly
+      // as the ImageData's backing store instead of allocating a persistent
+      // ImageData and .set()-copying into it each frame — that was the last
+      // remaining per-frame copy in the whole pipeline.
+      const expected = frame.width * frame.height * 4;
+      let imageData = null;
+      try {
+        const clamped = new Uint8ClampedArray(frame.buffer, 0, expected);
+        imageData = new ImageData(clamped, frame.width, frame.height);
+      } catch (e) {
+        // Fallback for engines that reject custom-backed ImageData — copy
+        // into a reusable ImageData instead of dropping the frame.
+        if (!this.imageData || this.imageData.width !== frame.width || this.imageData.height !== frame.height) {
+          this.imageData = new ImageData(frame.width, frame.height);
+        }
+        try { this.imageData.data.set(new Uint8ClampedArray(frame.buffer, 0, expected)); imageData = this.imageData; }
+        catch (e2) { return; }
+      }
+      this.ctx.putImageData(imageData, 0, 0);
+
+      if (t0) {
+        // Times each paint — putImageData runs on the main/UI thread, so a
+        // slow one (>16ms, i.e. missing a 60fps frame budget) is a direct
+        // candidate for the "mouse turns into a load wheel" symptom,
+        // especially if these cluster or grow with frame size.
+        const ms = performance.now() - t0;
+        const fs = this._frameStats;
+        fs.count += 1;
+        fs.lastPaintMs = ms;
+        if (ms > fs.maxPaintMs) fs.maxPaintMs = ms;
+        if (ms > 16) {
+          fs.slowCount += 1;
+          this.dlog(`SLOW paint: ${ms.toFixed(1)}ms for ${frame.width}x${frame.height} frame (#${fs.slowCount} slow so far — may cause cursor stalls)`);
+        }
+        const now = Date.now();
+        if (!fs.windowStart) fs.windowStart = now;
+        const elapsed = now - fs.windowStart;
+        if (elapsed >= 1000) {
+          fs.fps = (fs.count / (elapsed / 1000)).toFixed(1);
+          this.dlog(`frame stats: ${fs.count} frames in ${elapsed}ms (~${fs.fps} fps), last=${fs.lastPaintMs.toFixed(1)}ms max=${fs.maxPaintMs.toFixed(1)}ms slow=${fs.slowCount}`);
+          fs.count = 0; fs.windowStart = now;
+        }
+        this._renderHud();
+      }
+    },
+
+    // --- controls: reuse the EXACT same overlay controls-bar the in-app
+    // <video> VOD path uses (play/pause, stop, back, seek row, volume,
+    // audio/subtitle tracks, skip/fast-forward) — rather than a separate
+    // bar — so the UI is identical and there's only ever one set of
+    // controls on screen. The shared button handlers (search "Mpv2.active"
+    // below) branch to the methods here instead of driving <video>.
+    tracks: null,
+
+    bindControls() {
+      if (this._controlsBound) return;
+      this._controlsBound = true;
+      const seek = $('#vod-seek');
+      const curEl = $('#vod-time-cur');
+      const durEl = $('#vod-time-dur');
+      this._seekEls = { seek, curEl, durEl };
+      if (seek) {
+        seek.addEventListener('input', () => {
+          if (!this.active) return;
+          this.seeking = true;
+          const t = Number(seek.value);
+          this.position = t;
+          if (curEl) curEl.textContent = fmtClockTime(t);
+        });
+        seek.addEventListener('change', () => {
+          if (!this.active) return;
+          const t = Number(seek.value);
+          this.command(['seek', t, 'absolute']).finally(() => { this.seeking = false; });
+        });
+      }
+    },
+
+    syncControls() {
+      setPlayIcon(!this.paused);
+      const els = this._seekEls;
+      if (els && els.seek && !this.seeking) {
+        els.seek.max = String(Math.floor(this.duration || 0));
+        els.seek.value = String(Math.floor(this.position || 0));
+      }
+      if (els && els.curEl) els.curEl.textContent = fmtClockTime(this.position || 0);
+      if (els && els.durEl) els.durEl.textContent = fmtClockTime(this.duration || 0);
+      const vol = $('#vol');
+      if (vol && document.activeElement !== vol) vol.value = String(Math.round(this.volume));
+      setMuteIcon(this.volume <= 0);
+    },
+
+    togglePause() {
+      const next = !this.paused;
+      this.paused = next;
+      setPlayIcon(!next);
+      try { window.xtream.mpv2SetProperty('pause', next); } catch (e) {}
+    },
+
+    setVolume(v) {
+      this.volume = v;
+      try { window.xtream.mpv2SetProperty('volume', v); } catch (e) {}
+    },
+
+    seekRelative(deltaSeconds) {
+      this.command(['seek', deltaSeconds, 'relative']);
+    },
+
+    setSpeed(rate) {
+      try { window.xtream.mpv2SetProperty('speed', rate); } catch (e) {}
+    },
+
+    // --- audio/subtitle tracks, sourced from libmpv's `track-list` property
+    // (observed in main.js) and exposed through the same track-menu UI as
+    // the in-app player via getVodAudioTracks/getVodSubtitleTracks below.
+    getAudioTracks() {
+      const list = (this.tracks || []).filter((t) => t && t.type === 'audio');
+      return list.map((t) => ({
+        id: t.id, label: t.title || t.lang || ('Track ' + t.id),
+        active: !!t.selected,
+        select: () => { try { window.xtream.mpv2SetProperty('aid', t.id); } catch (e) {} }
+      }));
+    },
+    getSubtitleTracks() {
+      const list = (this.tracks || []).filter((t) => t && t.type === 'sub');
+      if (!list.length) return [];
+      const out = [{
+        // mpv's `sid` is a track-id/string property, not a boolean flag — it
+        // must be set to the string "no" to disable subtitles (sending
+        // `false` gets rejected as MPV_FORMAT_FLAG with the wrong property
+        // type and silently no-ops, which is why "Off" looked unwired).
+        id: 'off', label: 'Off', active: !list.some((t) => t.selected),
+        select: () => { try { window.xtream.mpv2SetProperty('sid', 'no'); } catch (e) {} }
+      }];
+      list.forEach((t) => out.push({
+        id: t.id, label: t.title || t.lang || ('Subtitle ' + t.id),
+        active: !!t.selected,
+        select: () => { try { window.xtream.mpv2SetProperty('sid', t.id); } catch (e) {} }
+      }));
+      return out;
+    },
+
+    command(cmdArr) {
+      try { return window.xtream.mpv2Command(cmdArr) || Promise.resolve(); }
+      catch (e) { return Promise.resolve(); }
+    },
+
+    // Frames now arrive over a dedicated zero-copy MessagePort (see
+    // preload.js + main.js setupMpv2FramePort) instead of the regular
+    // mpv2:event IPC channel — keeps the ~8MB/frame RGBA buffers from ever
+    // being structured-cloned. Same backpressure handling as before: stash
+    // only the latest frame and let rAF paint at most once per refresh.
+    onFramePortMessage(data) {
+      if (!data || data.type !== 'frame' || !this.active) return;
+      this._pendingFrame = data;
+      this.schedulePaint();
+    },
+  };
+
+  // One-time listener: receive the mpv2 frame MessagePort that preload.js
+  // relays into the main world via window.postMessage(..., [port]) — a
+  // transfer, not a clone, so the port (and every ArrayBuffer sent over it
+  // afterward) reaches us with zero copying. The main process re-sends this
+  // on every page load (see did-finish-load in main.js), so this listener
+  // just needs to stay registered and swap in whichever port arrives latest.
+  window.addEventListener('message', (event) => {
+    if (event.data !== 'mpv2:frame-port') return;
+    const port = event.ports && event.ports[0];
+    if (!port) return;
+    if (Mpv2._framePort) { try { Mpv2._framePort.close(); } catch (e) {} }
+    Mpv2._framePort = port;
+    port.onmessage = (e) => Mpv2.onFramePortMessage(e.data);
+    port.start();
+  });
+
+  function playVodUrl(url, title, entry) {
+    teardownMpvWatch();
+    Mpv2.teardown();
+    // Preference order: embedded libmpv (in-window, best) → external mpv
+    // window (still native demux/decode/subs, just its own window) → in-app
+    // browser/ffmpeg pipeline (always available, weakest codec/subtitle
+    // support). Each step only proceeds if the previous one is unavailable
+    // or fails to start.
+    Mpv2.tryStart(url, title).then((handled) => {
+      if (handled) {
+        setView('player');
+        const overlay = $('#player-overlay'); if (overlay) overlay.classList.add('vod-mode');
+        return;
+      }
+      tryPlayVodWithMpv(url, title).then((handledExternal) => {
+        if (!handledExternal) playVodUrlInApp(url, title, entry);
+      });
+    });
+  }
+
+  function playVodUrlInApp(url, title, entry) {
+    setView('player');
+    State.currentChannel = null;
+    try { $('#player-empty').classList.add('hidden'); } catch (e) {}
+    const overlay = $('#player-overlay'); if (overlay) overlay.classList.add('vod-mode');
+    const numEl = $('#ov-num'); if (numEl) numEl.textContent = 'VOD';
+    const nameEl = $('#ov-name'); if (nameEl) nameEl.textContent = title || '';
+    const nowEl = $('#ov-now'); if (nowEl) nowEl.textContent = '';
+    const nextEl = $('#ov-next'); if (nextEl) nextEl.textContent = '';
+    const logoEl = $('#ov-logo'); if (logoEl) { logoEl.removeAttribute('src'); logoEl.style.display = 'none'; }
+    const clearlogoEl = $('#ov-clearlogo');
+    if (clearlogoEl) {
+      const logoUrl = entry && entry._logo;
+      if (logoUrl) { clearlogoEl.src = logoUrl; clearlogoEl.alt = title || ''; }
+      else { clearlogoEl.removeAttribute('src'); }
+    }
+    resetVodTransport();
+    State.player.load(url);
+    initVodSeekBar();
+    initVodTrackButtons();
+    initVodScrubPreview(url);
+    showOverlayTemporarily();
+    enterVodFullscreen();
+  }
+
+  // VOD now always starts in fullscreen — there's no "fullscreen" button on
+  // the VOD controls anymore (it doesn't make sense for on-demand viewing the
+  // way it does for Live TV), so this is the only way in.
+  function enterVodFullscreen() {
+    const wrap = $('#player-wrap');
+    if (!wrap || document.fullscreenElement) return;
+    try {
+      const req = wrap.requestFullscreen && wrap.requestFullscreen();
+      if (req && req.catch) req.catch(() => {});
+    } catch (e) {}
+  }
+
+  // Stops VOD playback and returns to the VOD library/browse screen.
+  // Wired to both the on-screen "back" button and the Esc key while a VOD is
+  // playing — there was previously no way to back out of the player to the
+  // movies/shows menu short of switching modes entirely.
+  function exitVodPlayback() {
+    if (Mpv2.active) {
+      Mpv2.teardown();
+      try { window.xtream && window.xtream.mpv2Close && window.xtream.mpv2Close(); } catch (e) {}
+      State.currentChannel = null;
+      const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+      setView('vod');
+      return;
+    }
+    if (_mpvActive) {
+      teardownMpvWatch();
+      try { window.xtream && window.xtream.mpvStop && window.xtream.mpvStop(); } catch (e) {}
+      State.currentChannel = null;
+      const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+      setView('vod');
+      return;
+    }
+    try { closeAllTrackMenus(); } catch (e) {}
+    try { resetVodTransport(); } catch (e) {}
+    try { if (document.fullscreenElement) document.exitFullscreen && document.exitFullscreen(); } catch (e) {}
+    try { State.player.stop(); } catch (e) {}
+    const overlay = $('#player-overlay'); if (overlay) overlay.classList.remove('vod-mode');
+    State.currentChannel = null;
+    setView('vod');
+  }
+
+  // --- VOD transport: skip / fast-forward / rewind state -------------------
+  const VodTransport = {
+    skipDir: 0, skipStreak: 0, skipTimer: null,
+    ffRate: 1, ffDir: 0, ffTimer: null,
+  };
+
+  function resetVodTransport() {
+    VodTransport.skipDir = 0; VodTransport.skipStreak = 0;
+    if (VodTransport.skipTimer) { clearTimeout(VodTransport.skipTimer); VodTransport.skipTimer = null; }
+    VodTransport.ffRate = 1; VodTransport.ffDir = 0;
+    if (VodTransport.ffTimer) { clearInterval(VodTransport.ffTimer); VodTransport.ffTimer = null; }
+    if (Mpv2.active) Mpv2.setSpeed(1);
+    else try { State.player.video.playbackRate = 1; } catch (e) {}
+  }
+
+  // Skip ±10s on consecutive presses of the same direction; the increment grows
+  // with each press in a row (10s, 20s, 30s, …) and resets after a short pause.
+  function vodSkip(dir) {
+    const mpv2 = Mpv2.active;
+    const video = !mpv2 && State.player && State.player.video;
+    if (!mpv2 && !video) return;
+    if (VodTransport.skipTimer) clearTimeout(VodTransport.skipTimer);
+    if (VodTransport.skipDir === dir) { VodTransport.skipStreak += 1; }
+    else { VodTransport.skipDir = dir; VodTransport.skipStreak = 1; }
+    const amount = 10 * VodTransport.skipStreak;
+    if (mpv2) {
+      Mpv2.seekRelative(dir * amount);
+    } else {
+      const dur = video.duration || Infinity;
+      try { video.currentTime = Math.max(0, Math.min(dur, (video.currentTime || 0) + dir * amount)); } catch (e) {}
+    }
+    toast((dir > 0 ? '+' : '−') + amount + 's', 900);
+    VodTransport.skipTimer = setTimeout(() => { VodTransport.skipDir = 0; VodTransport.skipStreak = 0; }, 1200);
+  }
+
+  function fmtClockTime(secs) {
+    if (!isFinite(secs) || secs < 0) secs = 0;
+    secs = Math.floor(secs);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function initVodSeekBar() {
+    // Mpv2 binds + drives the same #vod-seek/#vod-time-* elements itself
+    // (see Mpv2.bindControls/syncControls) — nothing to wire to a <video>.
+    if (Mpv2.active) return;
+    const video = State.player && State.player.video;
+    const seek = $('#vod-seek');
+    const curEl = $('#vod-time-cur');
+    const durEl = $('#vod-time-dur');
+    if (!video || !seek) return;
+    if (seek._vodBound) return; // listeners attached once; values refresh per-load via timeupdate/loadedmetadata
+    seek._vodBound = true;
+    let scrubbing = false;
+    const update = () => {
+      // These listeners are bound once per `<video>` element (`_vodBound`)
+      // and stay attached for the element's lifetime. If the embedded
+      // native player later takes over the SAME #vod-seek/#vod-time-* DOM
+      // elements (see Mpv2.bindControls), this stale `<video>`-driven
+      // `update()` keeps firing on its own timeupdate/loadedmetadata events
+      // and overwrites whatever Mpv2.syncControls() just wrote — which is
+      // what made the seek bar look "stuck"/not tracking the native
+      // player's actual position. Bail out whenever Mpv2 owns the controls.
+      if (Mpv2.active) return;
+      if (scrubbing) return;
+      const dur = video.duration || 0;
+      if (dur > 0) {
+        seek.max = String(Math.floor(dur));
+        seek.value = String(Math.floor(video.currentTime || 0));
+      }
+      if (curEl) curEl.textContent = fmtClockTime(video.currentTime || 0);
+      if (durEl) durEl.textContent = fmtClockTime(dur);
+    };
+    video.addEventListener('timeupdate', update);
+    video.addEventListener('loadedmetadata', update);
+    video.addEventListener('durationchange', update);
+    seek.addEventListener('input', () => {
+      if (Mpv2.active) return; // Mpv2.bindControls owns these elements now
+      scrubbing = true;
+      if (curEl) curEl.textContent = fmtClockTime(Number(seek.value));
+    });
+    seek.addEventListener('change', () => {
+      if (Mpv2.active) return; // Mpv2.bindControls owns these elements now
+      try { video.currentTime = Number(seek.value); } catch (e) {}
+      scrubbing = false;
+      update();
+    });
+    update();
+  }
+
+  // --- VOD subtitle / audio-track selectors --------------------------------
+  // Builds simple popover menus over the audio-track and subtitle buttons.
+  // Tracks can come from either HLS.js (remuxed/transcoded streams expose
+  // `hls.audioTracks` / `hls.subtitleTracks`) or the native <video> element
+  // (`video.audioTracks` / `video.textTracks` — Chromium support varies by
+  // container, but mp4/mkv direct-play files often carry usable text tracks).
+  const VodTracks = { menuEl: null, kind: null };
+
+  function closeAllTrackMenus() {
+    if (VodTracks.menuEl && VodTracks.menuEl.parentNode) VodTracks.menuEl.parentNode.removeChild(VodTracks.menuEl);
+    VodTracks.menuEl = null;
+    VodTracks.kind = null;
+    const a = $('#btn-audio-track'); if (a) a.classList.remove('is-active');
+    const s = $('#btn-subtitles'); if (s) s.classList.remove('is-active');
+  }
+
+  function getVodAudioTracks() {
+    if (Mpv2.active) return Mpv2.getAudioTracks();
+    const player = State.player;
+    if (player && player.hls && Array.isArray(player.hls.audioTracks) && player.hls.audioTracks.length) {
+      return player.hls.audioTracks.map((t, i) => ({
+        id: i, label: t.name || t.lang || ('Track ' + (i + 1)),
+        active: i === player.hls.audioTrack,
+        select: () => { player.hls.audioTrack = i; }
+      }));
+    }
+    const video = player && player.video;
+    if (video && video.audioTracks && video.audioTracks.length > 1) {
+      const list = [];
+      for (let i = 0; i < video.audioTracks.length; i++) {
+        const t = video.audioTracks[i];
+        list.push({
+          id: i, label: t.label || t.language || ('Track ' + (i + 1)),
+          active: t.enabled,
+          select: () => { for (let j = 0; j < video.audioTracks.length; j++) video.audioTracks[j].enabled = (j === i); }
+        });
+      }
+      return list;
+    }
+    return [];
+  }
+
+  function getVodSubtitleTracks() {
+    if (Mpv2.active) return Mpv2.getSubtitleTracks();
+    const player = State.player;
+    const list = [{ id: 'off', label: 'Off', active: true, select: () => {} }];
+    if (player && player.hls && Array.isArray(player.hls.subtitleTracks) && player.hls.subtitleTracks.length) {
+      list[0].select = () => { player.hls.subtitleDisplay = false; player.hls.subtitleTrack = -1; };
+      player.hls.subtitleTracks.forEach((t, i) => {
+        list.push({
+          id: i, label: t.name || t.lang || ('Subtitle ' + (i + 1)),
+          active: player.hls.subtitleDisplay && player.hls.subtitleTrack === i,
+          select: () => { player.hls.subtitleTrack = i; player.hls.subtitleDisplay = true; }
+        });
+      });
+      if (player.hls.subtitleDisplay && player.hls.subtitleTrack >= 0) list[0].active = false;
+      return list;
+    }
+    const video = player && player.video;
+    if (video && video.textTracks && video.textTracks.length) {
+      list[0].select = () => { for (let j = 0; j < video.textTracks.length; j++) video.textTracks[j].mode = 'disabled'; };
+      let anyShowing = false;
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const t = video.textTracks[i];
+        if (t.kind !== 'subtitles' && t.kind !== 'captions') continue;
+        const showing = t.mode === 'showing';
+        if (showing) anyShowing = true;
+        list.push({
+          id: i, label: t.label || t.language || ('Subtitle ' + (i + 1)),
+          active: showing,
+          select: () => { for (let j = 0; j < video.textTracks.length; j++) video.textTracks[j].mode = (j === i ? 'showing' : 'disabled'); }
+        });
+      }
+      list[0].active = !anyShowing;
+      return list.length > 1 ? list : [];
+    }
+    return [];
+  }
+
+  function openTrackMenu(kind, btn, items) {
+    closeAllTrackMenus();
+    if (!items.length) { toast(kind === 'audio' ? 'No alternate audio tracks available' : 'No subtitles available'); return; }
+    const menu = document.createElement('div');
+    menu.className = 'track-menu';
+    items.forEach(item => {
+      const b = document.createElement('button');
+      b.className = 'track-item' + (item.active ? ' active' : '');
+      b.textContent = item.label;
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try { item.select(); } catch (err) {}
+        toast((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + item.label, 1400);
+        closeAllTrackMenus();
+      });
+      menu.appendChild(b);
+    });
+    btn.parentElement.style.position = btn.parentElement.style.position || 'relative';
+    menu.style.right = '0';
+    btn.parentElement.appendChild(menu);
+    VodTracks.menuEl = menu;
+    VodTracks.kind = kind;
+    btn.classList.add('is-active');
+  }
+
+  // Shows/hides the track buttons for the current VOD source and wires their
+  // click handlers (idempotent — safe to call on every `playVodUrl`).
+  function initVodTrackButtons() {
+    const audioBtn = $('#btn-audio-track');
+    const subsBtn = $('#btn-subtitles');
+    if (!audioBtn || !subsBtn) return;
+    closeAllTrackMenus();
+
+    const refresh = () => {
+      const audioTracks = getVodAudioTracks();
+      const subTracks = getVodSubtitleTracks();
+      audioBtn.classList.toggle('has-tracks', audioTracks.length > 0);
+      subsBtn.classList.toggle('has-tracks', subTracks.length > 0);
+    };
+    // Exposed so Mpv2 can re-run this when libmpv's `track-list` property
+    // updates (its tracks arrive asynchronously, unlike <video>'s).
+    VodTracks.refresh = refresh;
+
+    // Track lists aren't available immediately on load — re-check once
+    // metadata/manifest info comes in, plus shortly after in case HLS.js
+    // parses its track lists slightly later.
+    const video = !Mpv2.active && State.player && State.player.video;
+    if (video) {
+      video.addEventListener('loadedmetadata', refresh, { once: true });
+      setTimeout(refresh, 1500);
+      setTimeout(refresh, 4000);
+    }
+    refresh();
+
+    if (!audioBtn._vodBound) {
+      audioBtn._vodBound = true;
+      audioBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (VodTracks.menuEl && VodTracks.kind === 'audio') { closeAllTrackMenus(); return; }
+        openTrackMenu('audio', audioBtn, getVodAudioTracks());
+      });
+    }
+    if (!subsBtn._vodBound) {
+      subsBtn._vodBound = true;
+      subsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (VodTracks.menuEl && VodTracks.kind === 'subtitles') { closeAllTrackMenus(); return; }
+        openTrackMenu('subtitles', subsBtn, getVodSubtitleTracks());
+      });
+    }
+    if (!VodTracks._docBound) {
+      VodTracks._docBound = true;
+      document.addEventListener('click', () => closeAllTrackMenus());
+    }
+  }
+
+  // --- VOD scrub preview: floating time label + frame-capture thumbnail ----
+  // While dragging the seek thumb, shows a small floating time readout and a
+  // captured-frame thumbnail of where the drag would land, so you can see
+  // what scene you're scrubbing to before you let go.
+  const VodScrub = { offVideo: null, canvas: null, ctx: null, lastUrl: null, seekTimer: null, pendingTime: null };
+
+  function initVodScrubPreview(url) {
+    const seek = $('#vod-seek');
+    const previewEl = $('#vod-scrub-preview');
+    const timeEl = $('#vod-scrub-time');
+    const canvas = $('#vod-scrub-canvas');
+    if (!seek || !previewEl || !timeEl || !canvas) return;
+
+    if (!VodScrub.offVideo) {
+      const off = document.createElement('video');
+      off.muted = true;
+      off.preload = 'auto';
+      off.style.display = 'none';
+      document.body.appendChild(off);
+      VodScrub.offVideo = off;
+      VodScrub.canvas = canvas;
+      VodScrub.ctx = canvas.getContext('2d');
+      off.addEventListener('seeked', () => {
+        try { VodScrub.ctx.drawImage(off, 0, 0, canvas.width, canvas.height); } catch (e) {}
+      });
+    }
+    // Direct-play VOD URLs are plain mp4/mkv files — safe to load a second,
+    // independent <video> against the same URL for frame-grabbing. (Skip for
+    // HLS sources, where a second instance would mean a second HLS.js/manifest
+    // load — not worth the cost just for thumbnails.)
+    const isHls = /m3u8/i.test(url || '');
+    if (!isHls && VodScrub.lastUrl !== url) {
+      VodScrub.lastUrl = url;
+      try { VodScrub.offVideo.src = url; } catch (e) {}
+    } else if (isHls) {
+      VodScrub.lastUrl = null;
+      try { VodScrub.offVideo.removeAttribute('src'); VodScrub.offVideo.load(); } catch (e) {}
+    }
+
+    const positionFloaters = () => {
+      const pct = seek.max > 0 ? (Number(seek.value) / Number(seek.max)) : 0;
+      const trackW = seek.clientWidth || 0;
+      const x = Math.max(20, Math.min(trackW - 20, pct * trackW));
+      previewEl.style.left = x + 'px';
+      timeEl.style.left = x + 'px';
+    };
+
+    const grabFrame = (t) => {
+      const off = VodScrub.offVideo;
+      if (!off || VodScrub.lastUrl == null || !isFinite(t)) return;
+      VodScrub.pendingTime = t;
+      if (VodScrub.seekTimer) clearTimeout(VodScrub.seekTimer);
+      VodScrub.seekTimer = setTimeout(() => {
+        try { off.currentTime = VodScrub.pendingTime; } catch (e) {}
+      }, 120);
+    };
+
+    if (!seek._vodScrubBound) {
+      seek._vodScrubBound = true;
+      seek.addEventListener('input', () => {
+        const t = Number(seek.value);
+        timeEl.textContent = fmtClockTime(t);
+        positionFloaters();
+        timeEl.classList.add('show');
+        if (!isHls && VodScrub.lastUrl) { previewEl.classList.add('show'); grabFrame(t); }
+      });
+      const hideFloaters = () => {
+        timeEl.classList.remove('show');
+        previewEl.classList.remove('show');
+      };
+      seek.addEventListener('change', hideFloaters);
+      seek.addEventListener('mouseleave', hideFloaters);
+      seek.addEventListener('blur', hideFloaters);
+    }
+  }
+
+  async function resolveAndPlayMovie(imdbId, title, entry) {
+    vodLog('resolveAndPlayMovie start:', { imdbId, title });
+    toast('Looking for streams for "' + title + '"…', 8000);
+    try {
+      const raw = await StreamScrapers.queryMovie(imdbId);
+      vodLog('Raw scraper results:', raw.length);
+      if (!raw.length) { toast('No streams found for "' + title + '".'); return; }
+      const parsed = raw.map(parseStreamResult).filter(p => p.infoHash || p.url);
+      vodLog('Parsed results with usable streams (hash or direct URL):', parsed.length, '/', raw.length);
+      if (!parsed.length) { toast('Found results, but none were usable streams.'); return; }
+
+      let chosen;
+      if (Storage.getAutoPickStream()) {
+        chosen = pickBestStream(parsed);
+        vodLog('Auto-picked stream:', chosen && chosen.title);
+      } else {
+        chosen = await showStreamPickerModal(parsed);
+        if (!chosen) { vodLog('User cancelled stream picker.'); return; }
+        vodLog('User-picked stream:', chosen && chosen.title);
+      }
+
+      let url;
+      if (chosen.url) {
+        // Provider already resolved this to a direct, ready-to-play link
+        // (e.g. AIOStreams proxying through your linked debrid account) —
+        // no need to send it through this app's own Real-Debrid step too.
+        vodLog('Using provider-resolved direct URL:', chosen.url);
+        url = chosen.url;
+      } else {
+        toast('Resolving via Real-Debrid…', 8000);
+        url = await debridResolve(chosen, (msg) => { vodLog('Debrid status:', msg); toast(msg, 8000); });
+        vodLog('Resolved playable URL (Real-Debrid):', url);
+      }
+      playVodUrl(url, title, entry);
+      toast('Now playing: ' + title);
+    } catch (e) {
+      vodErr('resolveAndPlayMovie failed:', { imdbId, title }, e && (e.stack || e.message || e));
+      toast('Playback failed: ' + (e.message || String(e)));
+    }
+  }
+
+  function vodRail(title, items, kind) {
+    const wrap = document.createElement('div');
+    const heading = document.createElement('div');
+    heading.className = 'vod-rail-title';
+    heading.textContent = title;
+    const track = document.createElement('div');
+    track.className = 'vod-rail-track';
+    items.forEach(entry => track.appendChild(vodCard(entry, kind)));
+    wrap.appendChild(heading);
+    wrap.appendChild(track);
+    return wrap;
+  }
+
+  // Renders a tab bar + a single horizontally-scrolling poster row beneath it.
+  // Clicking a tab swaps which list of items fills that one row — this keeps
+  // the VOD screen a fixed size (only the row scrolls left/right) instead of
+  // stacking multiple rails and scrolling the whole page vertically.
+  // `sections`: [{ title, items, kind }, ...] — empty-item sections are skipped.
+  function vodTabbedRail(sections) {
+    const usable = sections.filter(s => s && Array.isArray(s.items) && s.items.length);
+    if (!usable.length) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'vod-tabbed-rail';
+    const tabs = document.createElement('div');
+    tabs.className = 'vod-rail-tabs';
+    const track = document.createElement('div');
+    track.className = 'vod-rail-track';
+
+    function showTab(idx) {
+      $$('button', tabs).forEach((b, i) => b.classList.toggle('active', i === idx));
+      track.innerHTML = '';
+      usable[idx].items.forEach(entry => track.appendChild(vodCard(entry, usable[idx].kind)));
+      track.scrollLeft = 0;
+    }
+    usable.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = s.title;
+      btn.addEventListener('click', () => showTab(i));
+      tabs.appendChild(btn);
+    });
+    wrap.appendChild(tabs);
+    wrap.appendChild(track);
+    showTab(0);
+    return wrap;
+  }
+
+  function vodEmptyState() {
+    const div = document.createElement('div');
+    div.className = 'vod-empty';
+    div.innerHTML = `
+      <div style="font-size:15px; font-weight:600; margin-bottom:6px; color:var(--text);">Connect an account to start browsing</div>
+      <div>Connect <strong>Trakt</strong> in <a href="#" id="vod-empty-settings-link">Settings → VOD Integrations</a> to load
+      trending and popular movies &amp; shows here, Netflix-style. You can also search for a specific title once Trakt
+      is connected. Real-Debrid is required to actually play a title once you find it.</div>`;
+    return div;
+  }
+
+  let _vodSection = 'movies';
+  async function renderVodSection(section) {
+    _vodSection = section;
+    $$('#vod-hub button').forEach(b => b.classList.toggle('active', b.dataset.vodSection === section));
+    $('#vod-search-row').style.display = (section === 'search') ? '' : 'none';
+    const rails = $('#vod-rails');
+    rails.innerHTML = '<div class="vod-empty">Loading…</div>';
+    $('#vod-spotlight').style.display = 'none';
+
+    const it = Storage.integrations();
+    if (!it.trakt.enabled || !it.trakt.accessToken) {
+      rails.innerHTML = '';
+      rails.appendChild(vodEmptyState());
+      const link = $('#vod-empty-settings-link');
+      if (link) link.addEventListener('click', (e) => {
+        e.preventDefault();
+        $('#btn-settings').click();
+        setTimeout(() => { const sec = $('#integrations-section'); if (sec) sec.open = true; }, 50);
+      });
+      return;
+    }
+
+    try {
+      rails.innerHTML = '';
+      if (section === 'home') {
+        const [trendM, popM, trendS] = await Promise.all([
+          TraktAPI.trendingMovies().catch(() => []),
+          TraktAPI.popularMovies().catch(() => []),
+          TraktAPI.trendingShows().catch(() => []),
+        ]);
+        if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Movies', items: trendM, kind: 'movie' },
+          { title: 'Trending Shows', items: trendS, kind: 'show' },
+          { title: 'Popular Movies', items: popM, kind: 'movie' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
+      } else if (section === 'movies') {
+        const [trendM, popM] = await Promise.all([
+          TraktAPI.trendingMovies().catch(() => []),
+          TraktAPI.popularMovies().catch(() => []),
+        ]);
+        if (trendM[0]) showVodSpotlight(trendM[0], 'movie');
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Movies', items: trendM, kind: 'movie' },
+          { title: 'Popular Movies', items: popM, kind: 'movie' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
+      } else if (section === 'shows') {
+        const [trendS, popS] = await Promise.all([
+          TraktAPI.trendingShows().catch(() => []),
+          TraktAPI.popularShows().catch(() => []),
+        ]);
+        if (trendS[0]) showVodSpotlight(trendS[0], 'show');
+        const tabbed = vodTabbedRail([
+          { title: 'Trending Shows', items: trendS, kind: 'show' },
+          { title: 'Popular Shows', items: popS, kind: 'show' },
+        ]);
+        if (tabbed) rails.appendChild(tabbed);
+        else rails.appendChild(vodEmptyState());
+      } else if (section === 'search') {
+        rails.innerHTML = '<div class="vod-empty">Type a title above and press Enter to search.</div>';
+      }
+    } catch (e) {
+      rails.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'vod-empty';
+      div.textContent = "Couldn't load titles from Trakt: " + (e.message || e);
+      rails.appendChild(div);
+    }
+  }
+
+  function renderVodHome() {
+    if (!$('#vod-hub')._wired) {
+      $('#vod-hub')._wired = true;
+      $$('#vod-hub button').forEach(b => b.addEventListener('click', () => renderVodSection(b.dataset.vodSection)));
+      const doSearch = debounce(async () => {
+        const q = $('#vod-search-input').value.trim();
+        const rails = $('#vod-rails');
+        if (!q) { rails.innerHTML = '<div class="vod-empty">Type a title above and press Enter to search.</div>'; return; }
+        rails.innerHTML = '<div class="vod-empty">Searching…</div>';
+        try {
+          const results = await TraktAPI.searchTitles(q);
+          rails.innerHTML = '';
+          const movies = results.filter(r => r.movie).map(r => r.movie ? { movie: r.movie } : r);
+          const shows  = results.filter(r => r.show).map(r => r.show ? { show: r.show } : r);
+          const tabbed = vodTabbedRail([
+            { title: 'Movies', items: movies, kind: 'movie' },
+            { title: 'Shows', items: shows, kind: 'show' },
+          ]);
+          if (tabbed) rails.appendChild(tabbed);
+          else rails.innerHTML = '<div class="vod-empty">No results found.</div>';
+        } catch (e) {
+          rails.innerHTML = '<div class="vod-empty">Search failed: ' + escapeHtml(e.message || String(e)) + '</div>';
+        }
+      }, 500);
+      $('#vod-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+    }
+    renderVodSection(_vodSection);
   }
 
   $('#btn-disconnect').addEventListener('click', () => {
@@ -4993,6 +8128,14 @@
     // Cmd/Ctrl shortcuts
     if (e.metaKey || e.ctrlKey) {
       if (e.key === 'g' || e.key === 'G') { e.preventDefault(); setView('guide'); return; }
+      // Ctrl/Cmd+Shift+D — toggle the embedded native-player debug HUD/log
+      // (captures lifecycle, property-change, and frame-paint timing so the
+      // user can copy & share diagnostics for playback issues).
+      if (e.shiftKey && (e.key === 'd' || e.key === 'D') && Mpv2.active) {
+        e.preventDefault();
+        Mpv2.toggleDebug();
+        return;
+      }
       return;
     }
     if (e.altKey) return;
@@ -5012,8 +8155,20 @@
         return;
       }
     }
+    // Esc backs out of VOD playback to the library (mirrors the on-screen
+    // back button) — takes priority over the generic Escape handling below.
+    if (e.key === 'Escape' && State.mode === 'vod' && State.view === 'player') {
+      e.preventDefault();
+      exitVodPlayback();
+      return;
+    }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dir = (e.key === 'ArrowRight') ? 1 : -1;
+      if (State.mode === 'vod' && State.view === 'player' && (Mpv2.active || (State.player && State.player.video))) {
+        e.preventDefault();
+        vodSkip(dir);
+        return;
+      }
       if (getFullscreenMultiTileIdx() >= 0) {
         e.preventDefault();
         cycleMultiFullscreen(dir);
@@ -5034,6 +8189,12 @@
         return;
       }
     }
+    // Holding a key down fires a flood of synthetic keydown events
+    // (e.repeat=true). None of these single-press shortcuts make sense
+    // repeated — holding Space was toggling play/pause dozens of times a
+    // second, which in turn spammed setProperty('pause'/'volume') at the
+    // native player and could stall its event loop. Swallow repeats here.
+    if (e.repeat) { e.preventDefault(); return; }
     switch (e.key) {
       case ' ': e.preventDefault(); $('#btn-play').click(); break;
       case 'ArrowDown': e.preventDefault(); $('#btn-next').click(); break;
@@ -5979,6 +9140,12 @@
     if (window.xtream && window.xtream.onCastLog) {
       window.xtream.onCastLog(msg => console.log('%c[Cast]', 'color:#7ab4ff', msg));
     }
+    if (window.xtream && window.xtream.onNetLog) {
+      // Surfaces Cloudflare-bypass activity (which runs in the main process)
+      // directly in the renderer DevTools console, so it shows up alongside
+      // "[VOD]" lines and in any console log the user copies/exports to us.
+      window.xtream.onNetLog(msg => console.log('%c[netFetch]', 'color:#f0a868', msg));
+    }
     State.player.onLoading = (b) => setLoading(b, 'Buffering…');
     State.player.onError = (msg, meta) => {
       setLoading(false);
@@ -6186,7 +9353,9 @@
     }
     updateRuntimeAndLive();
     updateSignalBars();
-    setInterval(() => { updateRuntimeAndLive(); updateSignalBars(); }, 1000);
+    // Only do per-second player/runtime work while actually in Live TV mode —
+    // avoids touching the (possibly torn-down) video element while in VOD.
+    setInterval(() => { if (State.mode === 'live') { updateRuntimeAndLive(); updateSignalBars(); } }, 1000);
 
     $('#btn-live').addEventListener('click', () => {
       if (!State.player || !State.player.video) return;
@@ -6228,16 +9397,12 @@
       });
     }
 
-    // Render initial connect screen
+    // Pre-render the server list (used once the user picks Live TV) but don't
+    // show the connect screen yet — the very first thing the user sees is the
+    // Live TV / Video On Demand launcher. VOD doesn't need a server at all,
+    // so the connect screen only ever appears after choosing Live TV.
     renderServerList();
-
-    // Auto-connect to active server if exists
-    const active = Storage.activeServer();
-    if (active) {
-      connectToServer(active);
-    } else {
-      showConnect();
-    }
+    showModeLauncher();
 
     // Window resize — keep guide responsive
     window.addEventListener('resize', debounce(() => {
