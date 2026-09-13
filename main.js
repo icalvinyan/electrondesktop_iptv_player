@@ -23,6 +23,14 @@ const { URL } = require('node:url');
 app.commandLine.appendSwitch('enable-media-router');
 app.commandLine.appendSwitch('load-media-router-component-extension', '1');
 
+// ---------- never upgrade http:// streams to https:// ----------
+// Chromium upgrades http:// requests to https:// when the host publishes a DNS
+// HTTPS (SVCB) record. Cloudflare publishes one for every proxied host, even
+// deep subdomains its certificate doesn't cover — so IPTV edges like
+// "x.y.z.10001.d333n.xyz" fail with ERR_SSL_VERSION_OR_CIPHER_MISMATCH while
+// curl, VLC and the apk play the same http:// URL fine.
+app.commandLine.appendSwitch('disable-features', 'UseDnsHttpsSvcb');
+
 // ---------- pretend to be Chrome everywhere ----------
 // Many IPTV CDNs 403 the Electron User-Agent. Setting userAgentFallback globally
 // changes both navigator.userAgent and the default User-Agent header on every request.
