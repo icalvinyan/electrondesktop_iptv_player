@@ -1,0 +1,71 @@
+# Builds the macOS app on every merge to main and publishes it as a GitHub
+# Release. Version = <major.minor from package.json>.<run number>, so bumping
+# package.json to 0.2.0 makes the next release 0.2.<n>.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build-mac:
+    # Apple Silicon runner: package:mac targets arm64 only, and ffmpeg-static
+    # downloads the binary for the machine running npm ci.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set version
+        id: version
+        run: |
+          base=$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")
+          version="$base.${{ github.run_number }}"
+          npm version "$version" --no-git-tag-version
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build .dmg
+        run: npm run package:mac -- --publish never
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          notes=$(cat <<'NOTES'
+          Unsigned Apple Silicon build. After dragging **Xtream TV** into Applications, clear the quarantine flag once:
+
+          ```
+          xattr -dr com.apple.quarantine "/Applications/Xtream TV.app"
+          ```
+          NOTES
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # Re-run of the same workflow run: replace the assets.
+            gh release upload "$tag" dist/*.dmg --clobber
+          else
+            gh release create "$tag" dist/*.dmg \
+              --title "Xtream TV $VERSION" \
+              --target "$GITHUB_SHA" \
+              --notes "$notes" \
+              --generate-notes
+          fi

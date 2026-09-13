@@ -31,7 +31,8 @@ contextBridge.exposeInMainWorld('xtream', {
     ipcRenderer.on('cast:log', h);
     return () => ipcRenderer.removeListener('cast:log', h);
   },
-  // Local transcode — HEVC→H.264 HLS for the in-app player
-  localTranscode:     (url) => ipcRenderer.invoke('local:startTranscode', url),
+  // Local transcode — HEVC/AC-3 → HLS for the in-app player.
+  // opts.copyVideo: keep the video as-is and convert only the audio.
+  localTranscode:     (url, opts) => ipcRenderer.invoke('local:startTranscode', url, opts),
   localTranscodeStop: ()    => ipcRenderer.invoke('local:stopTranscode'),
 });

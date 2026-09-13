@@ -88,20 +88,52 @@ let _transcodeStream = null; // { proc, hlsDir, playlistPath, sourceUrl }
 // Local (non-Cast) transcode stream state — separate from Cast so both can coexist.
 let _localTranscodeStream = null; // { proc, hlsDir, playlistPath, sourceUrl }
 
-function startLocalTranscodeStream(sourceUrl) {
-  if (_localTranscodeStream) {
-    try { _localTranscodeStream.proc.kill(); } catch(_) {}
-    if (_localTranscodeStream.hlsDir) {
-      try { fs.rmSync(_localTranscodeStream.hlsDir, { recursive: true, force: true }); } catch(_) {}
+// Once ffmpeg is transcoding, one SIGTERM only requests a graceful stop, which
+// never completes while its input is stalled or reconnecting — the process
+// would linger holding a provider connection. Escalate to SIGKILL.
+function killFfmpeg(proc, { immediate = false } = {}) {
+  if (immediate) { try { proc.kill('SIGKILL'); } catch(_) {} return; }
+  try { proc.kill('SIGTERM'); } catch(_) { return; }
+  setTimeout(() => {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try { proc.kill('SIGKILL'); } catch(_) {}
     }
-    _localTranscodeStream = null;
+  }, 2000);
+}
+
+function stopLocalTranscodeStream({ immediate = false } = {}) {
+  if (!_localTranscodeStream) return;
+  killFfmpeg(_localTranscodeStream.proc, { immediate });
+  if (_localTranscodeStream.hlsDir) {
+    try { fs.rmSync(_localTranscodeStream.hlsDir, { recursive: true, force: true }); } catch(_) {}
   }
+  _localTranscodeStream = null;
+}
+
+// copyVideo: the renderer already decodes this video (only the audio, e.g.
+// AC-3, was unsupported), so pass it through untouched and convert just the
+// audio — far cheaper than a software HEVC→H.264 transcode.
+function startLocalTranscodeStream(sourceUrl, { copyVideo = false } = {}) {
+  stopLocalTranscodeStream();
   const ffBin = findFfmpeg();
   if (!ffBin) return null;
 
   const hlsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xtream-local-hls-'));
   const playlistPath = path.join(hlsDir, 'playlist.m3u8');
-  castProxyLog(`[LocalTranscode] starting ffmpeg HLS → ${hlsDir}`);
+  castProxyLog(`[LocalTranscode] starting ffmpeg HLS (${copyVideo ? 'copy video, AAC audio' : 'H.264/AAC'}) → ${hlsDir}`);
+
+  const videoArgs = copyVideo
+    ? ['-c:v', 'copy']
+    : [
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v', 'main',
+        '-level:v', '4.1',
+        '-vf', "scale='if(gt(iw,1920),1920,-2)':'if(gt(ih,1080),-2,ih)',format=yuv420p",
+        '-crf', '23',
+        '-x264-params', 'repeat_headers=1:bframes=0',
+      ];
 
   const proc = spawn(ffBin, [
     '-loglevel', 'error',
@@ -113,16 +145,11 @@ function startLocalTranscodeStream(sourceUrl) {
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
     '-i', sourceUrl,
-    '-map', '0:v:0',
-    '-map', '0:a:0',
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-tune', 'zerolatency',
-    '-profile:v', 'main',
-    '-level:v', '4.1',
-    '-vf', "scale='if(gt(iw,1920),1920,-2)':'if(gt(ih,1080),-2,ih)',format=yuv420p",
-    '-crf', '23',
-    '-x264-params', 'repeat_headers=1:bframes=0',
+    // Any -map disables ffmpeg's default stream selection, so map video and
+    // audio explicitly; '?' lets channels missing one of them still start.
+    '-map', '0:v:0?',
+    '-map', '0:a:0?',
+    ...videoArgs,
     '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', '48000',
@@ -404,8 +431,8 @@ function startCastProxyServer() {
     _castProxyLanIp = getLanIp();
 
     const srv = http.createServer((req, res) => {
-      // /cast-hls/ is handled by a separate listener added below — skip here
-      if (req.url.startsWith('/cast-hls/')) return;
+      // /cast-hls/ and /local-hls/ are handled by separate listeners added below — skip here
+      if (req.url.startsWith('/cast-hls/') || req.url.startsWith('/local-hls/')) return;
 
       // Handle CORS preflight
       if (req.method === 'OPTIONS') {
@@ -786,6 +813,7 @@ function configureNetwork() {
 // ---------- IPC: native fetch (used by renderer for big M3U downloads) ----------
 // Uses Electron's session fetch (Chromium network stack) so cookies set by
 // manifest/playlist responses are automatically sent on subsequent segment requests.
+const STATUS_ONLY_TIMEOUT_MS = 10000;
 async function netFetch(url, opts = {}) {
   try { new URL(url); } catch (e) { throw new Error('Invalid URL: ' + url); }
   const headers = {
@@ -793,17 +821,41 @@ async function netFetch(url, opts = {}) {
     'Accept': '*/*',
     ...(opts.headers || {}),
   };
+  // statusOnly: resolve as soon as headers arrive and never read the body —
+  // a live .m3u8 may redirect to an endless .ts stream. The controller
+  // enforces the headers timeout and then closes the request.
+  let controller = null, timer = null, timedOut = false;
+  if (opts.statusOnly) {
+    controller = new AbortController();
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, STATUS_ONLY_TIMEOUT_MS);
+  }
   // Use Electron session fetch — shares Chromium cookie jar and goes through
   // onBeforeSendHeaders/onHeadersReceived hooks just like renderer XHR.
-  const res = await session.defaultSession.fetch(url, {
-    method: opts.method || 'GET',
-    headers,
-    body: opts.body,
-  });
-  const buf = Buffer.from(await res.arrayBuffer());
-  const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
+  let res;
+  try {
+    res = await session.defaultSession.fetch(url, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.body,
+      signal: controller ? controller.signal : undefined,
+    });
+  } catch (e) {
+    if (timedOut) throw new Error(`Timed out after ${STATUS_ONLY_TIMEOUT_MS / 1000}s`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const headerObj = {};
   res.headers.forEach((v, k) => { headerObj[k] = v; });
+  if (opts.statusOnly) {
+    // Abort rather than res.body.cancel(): Electron's session.fetch keeps the
+    // underlying request open and reading after cancel(). Nothing reads the
+    // body, so the abort doesn't surface as a rejection.
+    controller.abort();
+    return { ok: res.ok, status: res.status, headers: headerObj, body: '' };
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const body = opts.binary ? buf.toString('binary') : buf.toString('utf8');
   return {
     ok: res.ok,
     status: res.status,
@@ -1632,17 +1684,9 @@ ipcMain.handle('cast:stop',        ()                           => { castStop();
 ipcMain.handle('cast:disconnect',  ()                           => { castDisconnectInternal(); });
 ipcMain.handle('cast:isConnected', ()                           => !!_castSocket && !_castSocket.destroyed);
 
-// Local transcode — lets the renderer play HEVC streams by routing through ffmpeg→H.264 HLS
-ipcMain.handle('local:startTranscode', (_e, url) => startLocalTranscodeStream(url));
-ipcMain.handle('local:stopTranscode',  () => {
-  if (_localTranscodeStream) {
-    try { _localTranscodeStream.proc.kill(); } catch(_) {}
-    if (_localTranscodeStream.hlsDir) {
-      try { fs.rmSync(_localTranscodeStream.hlsDir, { recursive: true, force: true }); } catch(_) {}
-    }
-    _localTranscodeStream = null;
-  }
-});
+// Local transcode — lets the renderer play HEVC/AC-3 streams by routing through ffmpeg→HLS
+ipcMain.handle('local:startTranscode', (_e, url, opts) => startLocalTranscodeStream(url, opts || {}));
+ipcMain.handle('local:stopTranscode',  () => stopLocalTranscodeStream());
 
 // ---------- application menu ----------
 function buildMenu() {
@@ -1698,6 +1742,9 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+// Don't orphan the in-app transcode's ffmpeg (it would keep streaming from the provider).
+app.on('will-quit', () => stopLocalTranscodeStream({ immediate: true }));
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
