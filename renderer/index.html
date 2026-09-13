@@ -2773,6 +2773,53 @@
       '. This is a provider-side outage or an IP block, not your account or this app. ' +
       'Try again later, try from another network/VPN, or contact your provider.';
   }
+  // Re-asks player_api.php about the account so a stream 401 can be pinned on
+  // the real cause. The panel answers 401 to a wrong password, but also
+  // momentarily to a valid login — so "your credentials are wrong" is only
+  // said when the panel says so. Never throws.
+  // → { verdict: 'rejected'|'expired'|'inactive'|'busy'|'ok'|'unknown', expDate, status, active, max }
+  async function checkAccountStatus(api) {
+    if (!(api instanceof XtreamAPI)) return { verdict: 'unknown' };
+    try {
+      const j = await Promise.race([
+        api.authenticate(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+      ]);
+      const u = (j && j.user_info) || {};
+      const expDate = u.exp_date && !isNaN(+u.exp_date) ? new Date(+u.exp_date * 1000) : null;
+      const active = parseInt(u.active_cons, 10), max = parseInt(u.max_connections, 10);
+      const base = { expDate, status: u.status || '', active, max };
+      if (expDate && expDate < new Date()) return { ...base, verdict: 'expired' };
+      if (u.status && !/^active$/i.test(u.status)) return { ...base, verdict: 'inactive' };
+      if (max > 0 && active >= max) return { ...base, verdict: 'busy' };
+      return { ...base, verdict: 'ok' };
+    } catch (e) {
+      return { verdict: /Authentication failed/.test(e.message) ? 'rejected' : 'unknown' };
+    }
+  }
+  function auth401Message(what, account) {
+    const head = what + ' (HTTP 401 Unauthorized)';
+    const a = account || { verdict: 'unknown' };
+    switch (a.verdict) {
+      case 'rejected':
+        return head + '. The panel no longer accepts this username/password — the account was disabled or its password changed. Check with your provider, then re-add the server.';
+      case 'expired':
+        return head + '. The account expired on ' + a.expDate.toLocaleDateString() + ' — renew it with your provider.';
+      case 'inactive':
+        return head + '. The panel reports the account as "' + a.status + '" — contact your provider.';
+      case 'busy':
+        return head + '. ' + (a.max === 1 ? 'The account\'s only connection slot is' : 'All ' + a.max + ' connection slots on this account are') +
+          ' in use (' + a.active + '/' + a.max + ') — close other apps/devices using it, then retry.';
+      case 'ok':
+        return head + ', even after an automatic retry — but the login itself is fine right now (' +
+          (a.status || 'Active') + (a.expDate ? ', expires ' + a.expDate.toLocaleDateString() : '') +
+          (a.max > 0 ? ', ' + (a.active || 0) + '/' + a.max + ' connections in use' : '') +
+          '). The panel refused this stream request temporarily; retry in a moment. ' +
+          'If only this channel keeps failing, the provider is restricting it for your line.';
+      default:
+        return head + '. Your credentials may be wrong or expired, or the panel refused the request temporarily. Retry; if it persists, check the account with your provider.';
+    }
+  }
   // Network errors that mean the server won't answer at all — safe to stop
   // retrying on and to reject a server for at import time.
   const UNREACHABLE_NET_ERRORS = new Set([
@@ -2830,7 +2877,8 @@
       this.onPlay = null;
       this.onLoading = null;
       this.onReady = null;
-      this._loadToken = 0;             // bumped on load()/stop() so stale async callbacks bail
+      this.checkAccount = null;        // async () => account verdict (see checkAccountStatus), for 401s
+      this._loadToken = 0;            // bumped on load()/stop() so stale async callbacks bail
       this._transcodeActive = false;   // a local ffmpeg transcode belongs to this player
       this._listenersAttached = false;
       this._attach();
@@ -2980,9 +3028,16 @@
         this._loadToken++; // drop any late callbacks from this load
         if (this.hls) { try { this.hls.destroy(); } catch(e){} this.hls = null; }
       }
+      // A 401 doesn't say whether the login itself is bad — ask the panel.
+      if (info.httpCode === 401 && this.checkAccount) {
+        try { info.account = await this.checkAccount(); } catch (e) {}
+        if (this._loadToken !== tok) return;
+      }
       const msg = this._classify(info);
       meta.netError = info.netError || '';
-      meta.hideCorsProxies = !!info.unreachable;
+      // Unreachable servers and auth rejections aren't CORS problems — and the
+      // public proxies would just receive the user's credentials.
+      meta.hideCorsProxies = !!info.unreachable || info.httpCode === 401;
       this._fail(msg, meta);
     }
     // hls.js retries a failing fragment for ~38s before going fatal, and load()'s
@@ -3046,6 +3101,7 @@
       this._triedLocalTranscode = false;
       this._earlyProbed = false;
       this._triedAudioTranscode = false;
+      this._authRetried = false;
       this._setLoading(true);
       // Clean up
       if (this.hls) {
@@ -3093,6 +3149,18 @@
           // Codec failures never recover — skip the recoverMediaError() retries
           // and go straight to the ffmpeg transcode.
           if (isCodecFailure(data.details) && this._transcodeFallback(info)) return;
+          // A 401 on a login that checks out is usually a momentary panel
+          // hiccup — reload the playlist once before reporting it.
+          if (info.httpCode === 401 && !this._authRetried) {
+            this._authRetried = true;
+            const tok = this._loadToken;
+            console.warn('[HLS] HTTP 401 — reloading once in 2s', info.url);
+            setTimeout(() => {
+              if (this._loadToken !== tok || !this.hls) return;
+              try { this.hls.loadSource(url); } catch(e){}
+            }, 2000);
+            return;
+          }
           // Never retry auth/permission errors — startLoad() won't fix a 403 or 401.
           const isAuthError = info.httpCode === 403 || info.httpCode === 401;
           if (recoveryTries <= 2 && !isAuthError) {
@@ -3246,9 +3314,7 @@
         if (info.httpCode === 403) {
           return 'CDN refused the variant playlist (HTTP 403). The stream\'s access token is likely IP-locked or has expired — it was probably valid only for the client that fetched the master playlist (e.g. VLC). Try refreshing the channel list or re-entering your credentials.';
         }
-        if (info.httpCode === 401) {
-          return 'CDN rejected the variant playlist (HTTP 401 Unauthorized). Your credentials may be expired — try re-adding the server.';
-        }
+        if (info.httpCode === 401) return auth401Message('CDN rejected the variant playlist', info.account);
         return 'variant playlist fetch failed (' + (info.httpCode || 'no response') + '). The master m3u8 loaded but the CDN sub-playlist is unreachable.';
       }
       if (d.includes('manifestloaderror') || d.includes('manifestparsingerror')) {
@@ -3264,7 +3330,7 @@
             '  2. Concurrent connection cap — close other apps/devices using this account.\n' +
             '  3. Stream URL is from a different provider than your credentials.';
         }
-        if (info.httpCode === 401) return 'manifest fetch failed (HTTP 401 Unauthorized). Your credentials are wrong or expired — re-add the server.';
+        if (info.httpCode === 401) return auth401Message('manifest fetch failed', info.account);
         if (info.httpCode === 404) return 'manifest fetch failed (HTTP 404). This channel no longer exists on the server.';
         return 'manifest fetch failed (' + (info.httpCode || 'no response') + '). Could not load the stream playlist.';
       }
@@ -3285,7 +3351,7 @@
             '  4. Account expired or suspended — check with the provider.';
         }
         if (info.httpCode === 404) return 'segment fetch failed (HTTP 404). The .ts segment URL is gone from the manifest. Usually means the stream went offline; try another channel.';
-        if (info.httpCode === 401) return 'segment fetch failed (HTTP 401 Unauthorized). Your credentials may be wrong or the session expired — reconnect from the server picker.';
+        if (info.httpCode === 401) return auth401Message('segment fetch failed', info.account);
         return 'segment fetch failed (' + (info.httpCode || 'no response') + '). The manifest loaded but the .ts segments are blocked. Try again, switch channels, or check your account status.';
       }
       if (isCodecFailure(d) || d.includes('audiotrack')) {
@@ -9154,6 +9220,7 @@
         const n = neighborChannel(1); if (n) playChannel(n);
       }
     };
+    State.player.checkAccount = () => checkAccountStatus(State.api);
     State.player.onReady = () => { setLoading(false); hideStreamError(); };
     State.player.onPlay  = () => { hideStreamError(); };
 
